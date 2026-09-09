@@ -60,19 +60,46 @@ jobs:
           python3 tools/check-build-inputs.py --output /tmp/wine-audit.json || true
           cat /tmp/wine-audit.json | python3 -m json.tool | head -n 60
 
-  # Full build is manual only — uncomment when ready to burn macos-15 minutes
-  # wine-unix-build:
-  #   runs-on: macos-15
-  #   timeout-minutes: 60
-  #   steps:
-  #     - uses: actions/checkout@v5
-  #     - run: git submodule update --init --recursive --depth 1 wine FEX
-  #     - run: brew install bison flex
-  #     - run: |
-  #         cd wine
-  #         mkdir -p build-macos
-  #         ./configure --host=aarch64-apple-darwin --prefix=/tmp/wine-ios --without-x --without-freetype
-  #     - run: bash build/wineserver/build.sh
-  #     - run: bash build/ntdll-unix/build.sh
-  #     - uses: actions/upload-artifact@v5
-  #       with: { name: wine-unix-libs, path: app/Madeira/lib*.a }
+  wine-unix-build:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Fetch wine + FEX
+        run: git submodule update --init --recursive --depth 1 wine
+      - name: Install Wine build deps
+        run: brew install bison flex 2>&1 | tail -n 20
+      - name: Configure Wine for macOS (generates config.h for iOS cross)
+        run: |
+          cd wine
+          mkdir -p build-macos
+          # Minimal configure to generate include/config.h and dlls/ntdll headers for the iOS unixlibs.
+          # Uses macOS SDK, not iOS — iOS flags are in build/ntdll-unix/build.sh (xcrun iphoneos).
+          ./configure --enable-win64 --without-x --without-freetype --without-vulkan --disable-tests --prefix=/tmp/wine-ios > ../wine-configure.log 2>&1 || { cat ../wine-configure.log; exit 1; }
+          head -n 30 build-macos/include/config.h
+      - name: Build wineserver iOS lib
+        run: bash build/wineserver/build.sh 2>&1 | tee wineserver.log
+      - name: Build ntdll/win32u iOS libs
+        run: |
+          bash build/ntdll-unix/build.sh 2>&1 | tee ntdll.log
+          bash build/win32u-unix/build.sh 2>&1 | tee win32u.log || echo "::warning::win32u build failed — see win32u.log"
+      - name: Verify libs
+        run: |
+          ls -lh app/Madeira/libwineserver.a app/Madeira/libntdll_unix.a app/Madeira/libwin32u_unix.a
+          lipo -info app/Madeira/lib*.a || true
+      - uses: actions/upload-artifact@v5
+        with:
+          name: wine-unix-libs
+          path: |
+            app/Madeira/libwineserver.a
+            app/Madeira/libntdll_unix.a
+            app/Madeira/libwin32u_unix.a
+            wineserver.log
+            ntdll.log
+          if-no-files-found: error
+          retention-days: 7
