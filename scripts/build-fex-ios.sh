@@ -11,6 +11,15 @@ for tool in cmake ninja python3 xcrun; do
     command -v "$tool" >/dev/null || { echo "Missing tool: $tool" >&2; exit 1; }
 done
 [[ -f FEX/CMakeLists.txt ]] || { echo 'Initialize the pinned FEX submodule first.' >&2; exit 1; }
+# Apply iOS host stub for Windows types (MEMORY_BASIC_INFORMATION etc)
+# The pinned FEX fork uses VirtualQuery inside FEX_IOS_HOST without a
+# Windows SDK on the iOS sysroot, which breaks the hosted macos-15 build.
+# This patch is idempotent and lives in patches/fex-ios-arm64-mbi.patch.
+if [[ -f patches/fex-ios-arm64-mbi.patch ]]; then
+  echo "Applying FEX iOS host stub patch..."
+  # Use git apply so it works both locally and on the runner's shallow clone
+  git -C FEX apply --check ../patches/fex-ios-arm64-mbi.patch 2>/dev/null && git -C FEX apply ../patches/fex-ios-arm64-mbi.patch || echo "Patch already applied or not needed"
+fi
 # Clean any stale build dir from a previous failed run – CMake caches
 # IOS sysroot paths that change between runner images.
 rm -rf FEX/build-ios
