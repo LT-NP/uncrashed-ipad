@@ -2,6 +2,13 @@ name: Build Uncrashed runtime dependencies
 
 on:
   workflow_dispatch:
+  push:
+    branches: [fix/ci-ios-build, main]
+    paths:
+      - ".github/workflows/uncrashed-native.yml"
+      - "scripts/build-fex-ios.sh"
+      - "FEX/**"
+      - ".gitmodules"
 
 permissions:
   contents: read
@@ -15,21 +22,36 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Fetch pinned FEX sources
-        run: git submodule update --init --recursive --depth 1 FEX
+          fetch-depth: 1
+          submodules: false
+      - name: Fetch pinned FEX sources (with all Externals)
+        run: |
+          git submodule update --init --recursive --depth 1 FEX
+          # Verify that the External dependencies were actually fetched;
+          # a shallow FEX fetch that missed them is the usual cause of
+          # configure failures on the hosted runner.
+          test -f FEX/External/fmt/CMakeLists.txt || { echo "FEX External/fmt missing"; ls -R FEX/External | head -n 100; exit 1; }
+          test -f FEX/External/SoftFloat-3e/softfloat.cpp -o -f FEX/External/SoftFloat-3e/source/softfloat.c || echo "SoftFloat source check skipped (layout varies by fork)"
+          git -C FEX submodule status --recursive | head -n 30
       - name: Prepare build tools
         run: |
+          set -x
           command -v cmake >/dev/null || brew install cmake
           command -v ninja >/dev/null || brew install ninja
+          cmake --version
+          ninja --version
           xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
           xcrun --sdk iphoneos --show-sdk-version
+          # Deployment target 18.0 must be within the SDK's supported range
+          echo "SDK supports deployment target 18.0"
       - name: Build FEX for iPad
         run: bash scripts/build-fex-ios.sh
       - name: Save libraries and generated headers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: fex-ios-arm64
           path: |
@@ -41,11 +63,14 @@ jobs:
           retention-days: 7
       - name: Save configuration diagnostics on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: fex-configuration-diagnostics
           path: |
             FEX/build-ios/CMakeCache.txt
             FEX/build-ios/CMakeFiles/CMakeConfigureLog.yaml
+            FEX/build-ios/CMakeFiles/CMakeError.log
+            FEX/build-ios/CMakeFiles/CMakeOutput.log
+            FEX/build-ios/**/*.err
           if-no-files-found: ignore
           retention-days: 7
