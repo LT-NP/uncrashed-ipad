@@ -84,6 +84,18 @@ jobs:
           brew list llvm >/dev/null 2>&1 || true
           ln -sf "$PWD/toolchains" research/dxmt/toolchains 2>/dev/null || true
           ls -l research/dxmt/toolchains 2>&1 | head
+          # winecrt0 placeholder for dry-run: DXMT meson requires wine/build-macos/dlls/winecrt0/libwinecrt0.a
+          # The full Wine PE build (make dlls/winecrt0) is ~5min and not needed for dry-run validation.
+          # Create a dummy ar so meson can proceed to the toolchain check.
+          if [[ ! -f wine/build-macos/dlls/winecrt0/libwinecrt0.a ]]; then
+            echo "::notice::Creating dummy winecrt0 for dry-run"
+            mkdir -p wine/build-macos/dlls/winecrt0
+            printf '!<arch>\n' > wine/build-macos/dlls/winecrt0/libwinecrt0.a
+            # Also need winemac? Check other expected libs
+            mkdir -p wine/build-macos/dlls/ntdll
+            printf '!<arch>\n' > wine/build-macos/dlls/ntdll/libntdll.a 2>/dev/null || true
+          fi
+          ls -lh wine/build-macos/dlls/winecrt0/libwinecrt0.a 2>&1 | head
           # Validate cross file and that wine headers are findable — this is the 90% failure surface
           cat research/dxmt/build-aarch64-win.txt | head -n 30
           echo "--- meson setup dry-run ---"
