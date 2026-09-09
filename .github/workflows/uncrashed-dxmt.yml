@@ -104,15 +104,12 @@ jobs:
             fi
           done
           mkdir -p wine/build-macos/dlls/winecrt0 && printf '!<arch>\n' > wine/build-macos/dlls/winecrt0/libwinecrt0.a 2>/dev/null || true
-          # winebuild tool is required for meson — try to build it quickly, fallback to dummy
+          # winebuild tool is required for meson — create dummy for dry-run (real build is 'make -C wine/build-macos tools/winebuild/winebuild' ~30s)
           if [[ ! -x wine/build-macos/tools/winebuild/winebuild ]]; then
-            echo "Building winebuild tool for dry-run..."
-            make -C wine/build-macos tools/winebuild -j4 2>&1 | tail -n 20 || {
-              echo "::warning::make winebuild failed, creating dummy"
-              mkdir -p wine/build-macos/tools/winebuild
-              printf '#!/bin/sh\nexit 0\n' > wine/build-macos/tools/winebuild/winebuild
-              chmod +x wine/build-macos/tools/winebuild/winebuild
-            }
+            echo "Creating dummy winebuild for dry-run..."
+            mkdir -p wine/build-macos/tools/winebuild
+            printf '#!/bin/sh\nexit 0\n' > wine/build-macos/tools/winebuild/winebuild
+            chmod +x wine/build-macos/tools/winebuild/winebuild
           fi
           ls -lh wine/build-macos/dlls/winecrt0/aarch64-windows/libwinecrt0.a wine/build-macos/tools/winebuild/winebuild 2>&1 | head
           # Validate cross file and that wine headers are findable — this is the 90% failure surface
