@@ -84,18 +84,28 @@ jobs:
           brew list llvm >/dev/null 2>&1 || true
           ln -sf "$PWD/toolchains" research/dxmt/toolchains 2>/dev/null || true
           ls -l research/dxmt/toolchains 2>&1 | head
-          # winecrt0 placeholder for dry-run: DXMT meson requires wine/build-macos/dlls/winecrt0/libwinecrt0.a
+          # winecrt0 placeholder for dry-run: DXMT meson requires wine/build-macos/dlls/winecrt0/aarch64-windows/libwinecrt0.a
+          # (windows_builtin_install_dir = aarch64-windows for aarch64, see meson.build:211)
           # The full Wine PE build (make dlls/winecrt0) is ~5min and not needed for dry-run validation.
-          # Create a dummy ar so meson can proceed to the toolchain check.
-          if [[ ! -f wine/build-macos/dlls/winecrt0/libwinecrt0.a ]]; then
-            echo "::notice::Creating dummy winecrt0 for dry-run"
-            mkdir -p wine/build-macos/dlls/winecrt0
-            printf '!<arch>\n' > wine/build-macos/dlls/winecrt0/libwinecrt0.a
-            # Also need winemac? Check other expected libs
-            mkdir -p wine/build-macos/dlls/ntdll
-            printf '!<arch>\n' > wine/build-macos/dlls/ntdll/libntdll.a 2>/dev/null || true
-          fi
-          ls -lh wine/build-macos/dlls/winecrt0/libwinecrt0.a 2>&1 | head
+          # Create dummy ar in both possible dirs so meson can proceed to the toolchain check.
+          for dir in "dlls/winecrt0/aarch64-windows" "libs/winecrt0/aarch64-windows" "dlls/ntdll/aarch64-windows" "dlls/dbghelp/aarch64-windows" "dlls/ntdll" "dlls/winecrt0"; do
+            if [[ ! -f "wine/build-macos/$dir/libwinecrt0.a" && "$dir" == *winecrt0* ]]; then
+              mkdir -p "wine/build-macos/$dir"
+              printf '!<arch>\n' > "wine/build-macos/$dir/libwinecrt0.a"
+              echo "Created dummy wine/build-macos/$dir/libwinecrt0.a"
+            fi
+            if [[ "$dir" == *ntdll* && ! -f "wine/build-macos/$dir/libntdll.a" ]]; then
+              mkdir -p "wine/build-macos/$dir"
+              printf '!<arch>\n' > "wine/build-macos/$dir/libntdll.a" 2>/dev/null || true
+            fi
+            if [[ "$dir" == *dbghelp* && ! -f "wine/build-macos/$dir/libdbghelp.a" ]]; then
+              mkdir -p "wine/build-macos/$dir"
+              printf '!<arch>\n' > "wine/build-macos/$dir/libdbghelp.a" 2>/dev/null || true
+            fi
+          done
+          # Also ensure the non-arch subdir exists for older meson fallback
+          mkdir -p wine/build-macos/dlls/winecrt0 && printf '!<arch>\n' > wine/build-macos/dlls/winecrt0/libwinecrt0.a 2>/dev/null || true
+          ls -lh wine/build-macos/dlls/winecrt0/aarch64-windows/libwinecrt0.a wine/build-macos/libs/winecrt0/aarch64-windows/libwinecrt0.a 2>&1 | head
           # Validate cross file and that wine headers are findable — this is the 90% failure surface
           cat research/dxmt/build-aarch64-win.txt | head -n 30
           echo "--- meson setup dry-run ---"
