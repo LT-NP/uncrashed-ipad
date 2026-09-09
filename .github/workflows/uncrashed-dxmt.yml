@@ -24,8 +24,9 @@ jobs:
           submodules: false
       - name: Fetch DXMT submodule
         run: |
-          git submodule update --init --depth 1 research/dxmt
+          git submodule update --init --recursive --depth 1 research/dxmt
           test -f research/dxmt/src/dxmt/dxmt_device.cpp -o -f research/dxmt/src/winemetal/unix/winemetal_unix.c || { echo "dxmt sources missing"; ls research/dxmt/src | head; exit 1; }
+          test -f research/dxmt/external/nvapi/nvapi.h -o -f research/dxmt/include/native/directx/d3d11.h || { echo "DXMT nested submodules missing"; git -C research/dxmt submodule status --recursive | head; exit 1; }
           git -C research/dxmt log --oneline -3
       - name: Validate DXMT iOS build scripts without LLVM
         run: |
@@ -59,8 +60,10 @@ jobs:
           submodules: false
       - name: Fetch DXMT + wine headers + llvm-mingw
         run: |
-          git submodule update --init --depth 1 research/dxmt
+          git submodule update --init --recursive --depth 1 research/dxmt
           git submodule update --init --depth 1 wine
+          # DXMT's nested submodules (external/nvapi, include/native/directx) are required for meson
+          git -C research/dxmt submodule status --recursive | head -n 20
           # wine/build-macos needed for -Dwine_build_path
           if [[ ! -f wine/build-macos/include/config.h ]]; then echo "::warning::wine/build-macos not cached — dry-run may fail, run wine-unix-build first"; fi
           ls -ld toolchains/llvm-mingw-20260421-ucrt-macos-universal 2>&1 | head || echo "llvm-mingw not cached — will download"
