@@ -48,6 +48,52 @@ jobs:
           python3 tools/check-build-inputs.py --output /tmp/dxmt-audit.json || true
           cat /tmp/dxmt-audit.json | python3 -m json.tool | head -n 40
 
+  dxmt-dryrun:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Fetch DXMT + wine headers + llvm-mingw
+        run: |
+          git submodule update --init --depth 1 research/dxmt
+          git submodule update --init --depth 1 wine
+          # wine/build-macos needed for -Dwine_build_path
+          if [[ ! -f wine/build-macos/include/config.h ]]; then echo "::warning::wine/build-macos not cached — dry-run may fail, run wine-unix-build first"; fi
+          ls -ld toolchains/llvm-mingw-20260421-ucrt-macos-universal 2>&1 | head || echo "llvm-mingw not cached — will download"
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: toolchains/llvm-mingw-20260421-ucrt-macos-universal
+          key: llvm-mingw-20260421-aarch64
+      - name: Fetch llvm-mingw if missing
+        run: |
+          if [[ -d toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin ]]; then echo "llvm-mingw cached"; exit 0; fi
+          mkdir -p toolchains
+          curl -L https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/llvm-mingw-20260421-ucrt-macos-universal.tar.xz | tar -xJ -C toolchains/
+          ls toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin | head -n 20
+      - name: Meson setup dry-run (no compile, ~2min)
+        run: |
+          brew list meson >/dev/null 2>&1 || brew install meson ninja 2>&1 | tail -n 10
+          brew list llvm >/dev/null 2>&1 || true
+          ln -sf "$PWD/toolchains" research/dxmt/toolchains 2>/dev/null || true
+          ls -l research/dxmt/toolchains 2>&1 | head
+          # Validate cross file and that wine headers are findable — this is the 90% failure surface
+          cat research/dxmt/build-aarch64-win.txt | head -n 30
+          echo "--- meson setup dry-run ---"
+          # Use --reconfigure if build-pe exists, otherwise setup
+          rm -rf /tmp/dxmt-dryrun && mkdir -p /tmp/dxmt-dryrun
+          # We run meson setup but abort before compile — setup itself validates toolchain + wine_build_path
+          # If it succeeds, the 2hr compile is at least startable.
+          SDKROOT=$(xcrun --sdk macosx --show-sdk-path) PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/bin:$PATH" \
+            meson setup --cross-file research/dxmt/build-aarch64-win.txt --native-file research/dxmt/build-osx.txt -Dwine_build_path="$PWD/wine/build-macos" /tmp/dxmt-dryrun 2>&1 | tee /tmp/meson-setup.log | head -n 100
+          echo "Meson setup dry-run exit: $?"
+          cat /tmp/meson-setup.log | tail -n 50
+          if grep -q "Build targets in project:" /tmp/meson-setup.log; then echo "::notice::Meson setup dry-run succeeded — toolchain + wine_build_path OK, 2hr compile is startable"; else echo "::warning::Meson setup did not complete — check log"; exit 1; fi
+
   # Full DXMT build — manual dispatch only when LLVM is cached
   # dxmt-build:
   #   runs-on: macos-15
