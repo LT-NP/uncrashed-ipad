@@ -1,0 +1,36 @@
+name: IPA dry-run (Xcode without signing)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/ci-ios-build, main]
+    paths:
+      - ".github/workflows/uncrashed-ipa-dryrun.yml"
+      - "app/**"
+
+permissions:
+  contents: read
+
+jobs:
+  ipa-dryrun:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Fetch all submodules shallow (for Xcode file refs)
+        run: git submodule update --init --recursive --depth 1
+      - name: Ensure CI placeholders so Xcode has files to reference
+        run: bash tools/ensure-ci-placeholders.sh
+      - name: Xcode list and build-settings dry-run
+        run: |
+          xcodebuild -project app/Madeira.xcodeproj -list
+          xcodebuild -project app/Madeira.xcodeproj -scheme Madeira -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO -showBuildSettings | head -n 80
+          # This validates the PBX links without invoking the long native builds.
+          # A real unsigned IPA would be:
+          # xcodebuild -project app/Madeira.xcodeproj -scheme Madeira -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO build
+          echo "::notice::Dry-run only — no .ipa produced. Real IPA needs all native libs (FEX, GnuTLS, Wine, DXMT) and is manual dispatch."
+      - name: Check that placeholders satisfy Xcode
+        run: python3 tools/check-build-inputs.py --output /tmp/ipa-audit.json || true; cat /tmp/ipa-audit.json

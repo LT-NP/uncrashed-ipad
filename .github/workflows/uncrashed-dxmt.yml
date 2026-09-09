@@ -1,0 +1,62 @@
+name: Build DXMT iOS (scaffolding)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/ci-ios-build, main]
+    paths:
+      - ".github/workflows/uncrashed-dxmt.yml"
+      - "build/dxmt-ios/**"
+      - "research/dxmt/**"
+
+permissions:
+  contents: read
+
+jobs:
+  dxmt-check:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Fetch DXMT submodule
+        run: |
+          git submodule update --init --depth 1 research/dxmt
+          test -f research/dxmt/src/dxmt/dxmt_device.cpp -o -f research/dxmt/src/winemetal/unix/winemetal_unix.c || { echo "dxmt sources missing"; ls research/dxmt/src | head; exit 1; }
+          git -C research/dxmt log --oneline -3
+      - name: Validate DXMT iOS build scripts without LLVM
+        run: |
+          bash -n build/dxmt-ios/build.sh
+          cat build/dxmt-ios/README.md | head -n 40
+          echo "--- toolchains check ---"
+          ls -ld toolchains/ 2>&1 | head
+          if [[ -d toolchains/llvm-ios-build ]]; then
+            echo "llvm-ios-build present"
+            ls toolchains/llvm-ios-build/lib/*.a 2>&1 | head
+          else
+            echo "::notice::toolchains/llvm-ios-build not present — 2-stage LLVM 15 build (~2hr) required for libdxmt_combined.a. See build/dxmt-ios/README.md:43"
+          fi
+          if [[ -d toolchains/llvm-mingw-20260421-ucrt-macos-universal ]]; then
+            echo "llvm-mingw present"
+          else
+            echo "::notice::llvm-mingw not present — download 180MB tar.xz via README step 2 (cached on GH via actions/cache)."
+          fi
+          bash tools/ensure-ci-placeholders.sh
+          python3 tools/check-build-inputs.py --output /tmp/dxmt-audit.json || true
+          cat /tmp/dxmt-audit.json | python3 -m json.tool | head -n 40
+
+  # Full DXMT build — manual dispatch only when LLVM is cached
+  # dxmt-build:
+  #   runs-on: macos-15
+  #   timeout-minutes: 120
+  #   steps:
+  #     - uses: actions/checkout@v5
+  #     - uses: actions/cache@v4
+  #       with: { path: toolchains/llvm-ios-build, key: llvm-ios-15-${{ hashFiles('build/dxmt-ios/build.sh') }} }
+  #     - run: bash build/dxmt-ios/build.sh
+  #     - run: xcrun -sdk iphoneos libtool -static -o libdxmt_combined.a obj/*.o toolchains/llvm-ios-build/lib/*.a
+  #     - uses: actions/upload-artifact@v5
+  #       with: { name: dxmt-ios, path: app/Madeira/libdxmt_combined.a }
