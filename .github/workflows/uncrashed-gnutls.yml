@@ -25,6 +25,15 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
+      - name: Cache GnuTLS build (GMP/Nettle/GnuTLS obj + toolchain)
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchains/gnutls-ios
+            build/gnutls-ios/obj
+          key: gnutls-ios-${{ hashFiles('build/gnutls-ios/src/SHA256SUMS', 'build/gnutls-ios/build.sh') }}-aarch64
+          restore-keys: |
+            gnutls-ios-
       - name: Prepare build tools
         run: |
           xcodebuild -version

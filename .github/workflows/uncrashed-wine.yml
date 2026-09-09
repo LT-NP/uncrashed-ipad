@@ -29,6 +29,16 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
           submodules: false
+      - name: Cache wine configure (config.h) + placeholders
+        uses: actions/cache@v4
+        with:
+          path: |
+            wine/build-macos
+            build/gnutls-ios/obj
+            toolchains/gnutls-ios
+          key: wine-config-${{ hashFiles('wine/configure.ac', 'build/wineserver/build.sh') }}-aarch64
+          restore-keys: |
+            wine-config-
       - name: Fetch wine submodule (shallow)
         run: |
           git submodule update --init --depth 1 wine

@@ -94,9 +94,16 @@ def main():
         args.output.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     for check in report['checks']:
         if check['status'] != 'present':
-            print(f"{check['status']}: {check['path']}")
+            hint = ""
+            if "x86_64-vcruntime" in check['path']:
+                hint = " (fetch via tools/fetch-vcruntime.md or dummy via tools/ensure-ci-placeholders.sh)"
+            elif check['path'].endswith(".a"):
+                hint = " (build via GH workflow or dummy via ensure-ci-placeholders.sh)"
+            print(f"{check['status']}: {check['path']}{hint}")
     print(f"Checked {len(report['checks'])} inputs. Compile-attempt prerequisites: "
           + ('present' if report['ready_for_compile_attempt'] else 'INCOMPLETE'))
+    if not report['ready_for_compile_attempt']:
+        print("Hint: for CI validation without long builds, run: bash tools/ensure-ci-placeholders.sh")
     return 0 if report['ready_for_compile_attempt'] else 1
 
 

@@ -1467,20 +1467,44 @@ struct ContentView: View {
 
                 Button("Uncrashed (UE4, DirectX 11)") {
                     let relativeExe = "wine/drive_c/Program Files/Uncrashed FPV Drone Sim/Uncrashed/Binaries/Win64/Uncrashed-Win64-Shipping.exe"
-                    guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
-                          FileManager.default.fileExists(atPath: documents.appendingPathComponent(relativeExe).path) else {
+                    guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+                        logStore.log("Uncrashed: Documents unavailable", level: .error); return
+                    }
+                    let exeURL = documents.appendingPathComponent(relativeExe)
+                    let fm = FileManager.default
+                    guard fm.fileExists(atPath: exeURL.path) else {
                         logStore.log("Uncrashed is missing. Copy the full game folder to Documents/wine/drive_c/Program Files/Uncrashed FPV Drone Sim.", level: .error)
+                        logStore.log("Checked: \(exeURL.path)", level: .error)
+                        // Quick diagnostics: how much of the expected tree is present?
+                        let base = documents.appendingPathComponent("wine/drive_c/Program Files/Uncrashed FPV Drone Sim")
+                        if !fm.fileExists(atPath: base.path) {
+                            logStore.log("No Uncrashed folder at \(base.path) — deploy via scripts/deploy-uncrashed.sh", level: .error)
+                        } else {
+                            let paks = (try? fm.contentsOfDirectory(atPath: base.appendingPathComponent("Uncrashed/Content/Paks").path))?.filter{ $0.hasSuffix(".pak") }.count ?? 0
+                            logStore.log("Uncrashed folder exists but exe missing — Paks found: \(paks) (expected ~33)", level: .error)
+                        }
                         return
+                    }
+                    // Prerequisite checks that are cheap and explain the first failure before Wine logs appear
+                    let vcruntime = ["msvcp140.dll","vcruntime140.dll","vcruntime140_1.dll"].map{ documents.appendingPathComponent("wine/drive_c/Program Files/Uncrashed FPV Drone Sim/Uncrashed/Binaries/Win64/\($0)") } // game-side
+                    let bundledVCR = ["msvcp140.dll","vcruntime140.dll","vcruntime140_1.dll"].map{ Bundle.main.bundleURL.appendingPathComponent("x86_64-vcruntime/\($0)") }
+                    let vcrMissing = bundledVCR.filter{ !fm.fileExists(atPath: $0.path) }
+                    if !vcrMissing.isEmpty {
+                        logStore.log("Bundled VCRuntime missing in app: \(vcrMissing.map{$0.lastPathComponent}.joined(separator:", ")) — add via tools/fetch-vcruntime.md or GH artifact", level: .error)
+                    }
+                    if let attrs = try? fm.attributesOfItem(atPath: exeURL.path), let sz = attrs[.size] as? UInt64 {
+                        logStore.log(String(format:"Uncrashed exe: %@ (%.1f MB)", exeURL.lastPathComponent, Double(sz)/1024/1024))
                     }
                     var args = "Uncrashed -dx11 -windowed -ResX=960 -ResY=540 -log"
                     if let txt = try? String(contentsOf: documents.appendingPathComponent("uncrashed-args.txt"), encoding: .utf8) {
                         let value = txt.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !value.isEmpty { args = value }
+                        if !value.isEmpty { args = value; logStore.log("Using Documents/uncrashed-args.txt override") }
                     }
                     setenv("MADEIRA_EXE", "C:\\Program Files\\Uncrashed FPV Drone Sim\\Uncrashed\\Binaries\\Win64\\Uncrashed-Win64-Shipping.exe", 1)
                     setenv("MADEIRA_ARGS", args, 1)
                     unsetenv("MADEIRA_DESKTOP")
                     logStore.log("Uncrashed: args = \(args)")
+                    logStore.log("Tip: check LogStore + Unreal Saved/Logs after launch — first failure is usually Steam, d3d11.dll, or Jetsam (see UNCRASHED.md:50)", level: .success)
                     runWineFullSequence()
                 }
                 .buttonStyle(.borderedProminent)
