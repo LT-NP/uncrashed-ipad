@@ -59,12 +59,33 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     exe = args.root / 'Uncrashed/Binaries/Win64/Uncrashed-Win64-Shipping.exe'
-    report = inspect_pe(exe)
-    files = [p for p in args.root.rglob('*') if p.is_file()]
-    report['total_bytes'] = sum(p.stat().st_size for p in files)
-    report['package_counts'] = {ext: sum(p.suffix.lower() == ext for p in files) for ext in ('.pak', '.ucas', '.utoc')}
-    report['filename_matches_not_proof_of_anticheat'] = [str(p.relative_to(args.root)) for p in files if re.search('EasyAntiCheat|BattlEye|EOS|Denuvo|AntiCheat', p.name, re.I)]
-    args.output.write_text(json.dumps(report, indent=2), encoding='utf-8')
+    try:
+        report = inspect_pe(exe)
+    except Exception as e:
+        print(f"Failed to inspect PE: {e}", file=sys.stderr)
+        report = dict(error=str(e), exe=str(exe))
+        files = []
+        report['total_bytes'] = 0
+        report['package_counts'] = {}
+    else:
+        files = [p for p in args.root.rglob('*') if p.is_file()]
+        report['total_bytes'] = sum(p.stat().st_size for p in files)
+        report['package_counts'] = {ext: sum(p.suffix.lower() == ext for p in files) for ext in ('.pak', '.ucas', '.utoc')}
+    # Extra diagnostics helpful before iPad deploy (cheap, no heavy I/O beyond rglob above)
+    if files:
+        report['filename_matches_not_proof_of_anticheat'] = [str(p.relative_to(args.root)) for p in files if re.search('EasyAntiCheat|BattlEye|EOS|Denuvo|AntiCheat', p.name, re.I)]
+        # Check expected VCRuntime files alongside the exe (game ships them, but we also bundle them in app/Madeira)
+        for dll in ('msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll'):
+            p = args.root / f'Uncrashed/Binaries/Win64/{dll}'
+            report[f'has_{dll}'] = p.is_file()
+        # Warn if pak count is unexpected (Uncrashed has ~33 paks, not utoc/ucas)
+        if report['package_counts'].get('.pak',0) < 5:
+            report['warning'] = "Unusually few .pak files — copy may be incomplete"
+    if 'error' not in report:
+        args.output.write_text(json.dumps(report, indent=2), encoding='utf-8')
+    else:
+        # Still write partial report for debugging
+        args.output.write_text(json.dumps(report, indent=2), encoding='utf-8')
     print(json.dumps(report, indent=2))
 
 
