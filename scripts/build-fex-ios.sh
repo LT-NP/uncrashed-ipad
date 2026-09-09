@@ -20,6 +20,7 @@ cmake -S FEX -B FEX/build-ios -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER="$(xcrun --sdk iphoneos --find clang)" \
     -DCMAKE_CXX_COMPILER="$(xcrun --sdk iphoneos --find clang++)" \
+    -DCMAKE_CXX_FLAGS=-DFEX_IOS_HOST=1 \
     -DCMAKE_DISABLE_FIND_PACKAGE_fmt=ON \
     -DCMAKE_DISABLE_FIND_PACKAGE_range-v3=ON \
     -DCMAKE_DISABLE_FIND_PACKAGE_unordered_dense=ON \
