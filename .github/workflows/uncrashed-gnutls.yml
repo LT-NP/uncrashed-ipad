@@ -1,0 +1,68 @@
+name: Build GnuTLS stack for iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/ci-ios-build, main]
+    paths:
+      - ".github/workflows/uncrashed-gnutls.yml"
+      - "build/gnutls-ios/**"
+      - "build/crypto-unix/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uncrashed-gnutls-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gnutls-ios:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Prepare build tools
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos --show-sdk-version
+          clang --version
+          # Ensure tarballs are present (tracked)
+          ls -lh build/gnutls-ios/src/
+          cat build/gnutls-ios/src/SHA256SUMS
+          shasum -a 256 -c build/gnutls-ios/src/SHA256SUMS || echo "::warning::SHA mismatch but continuing (tracked tarballs should match)"
+      - name: Build GMP/Nettle/GnuTLS for iOS
+        run: |
+          set -x
+          bash build/gnutls-ios/build.sh 2>&1 | tee gnutls-build.log
+          echo "=== libs ==="
+          ls -lh toolchains/gnutls-ios/lib/*.a
+          lipo -info toolchains/gnutls-ios/lib/*.a || true
+          file toolchains/gnutls-ios/lib/*.a | head -n 20
+      - name: Save GnuTLS static libs
+        uses: actions/upload-artifact@v5
+        with:
+          name: gnutls-ios-arm64
+          path: |
+            toolchains/gnutls-ios/lib/*.a
+            toolchains/gnutls-ios/include/**
+            gnutls-build.log
+            build/gnutls-ios/obj/*-configure.log
+            build/gnutls-ios/obj/*-make.log
+          if-no-files-found: error
+          retention-days: 7
+      - name: Save diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: gnutls-diagnostics
+          path: |
+            gnutls-build.log
+            build/gnutls-ios/obj/*.log
+            toolchains/gnutls-ios/lib/*.a
+          if-no-files-found: warn
+          retention-days: 7

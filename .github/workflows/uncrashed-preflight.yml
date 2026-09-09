@@ -25,6 +25,11 @@ jobs:
         run: |
           plutil -lint app/Madeira.xcodeproj/project.pbxproj
           plutil -lint app/Madeira/Info.plist app/Madeira/Madeira.entitlements
+          xcodebuild -project app/Madeira.xcodeproj -list
+      - name: Validate Xcode build settings without linking
+        run: |
+          xcodebuild -project app/Madeira.xcodeproj -scheme Madeira -sdk iphoneos -showBuildSettings | head -n 100
+          xcodebuild -project app/Madeira.xcodeproj -scheme Madeira -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO -showBuildSettings | grep -E "PRODUCT_BUNDLE_IDENTIFIER|CODE_SIGN_ENTITLEMENTS|SDKROOT" | head -n 20
       - name: Parse Swift source (not type checking or linking)
         run: xcrun swiftc -frontend -parse app/Madeira/*.swift
       - name: Check Python and transfer script syntax
