@@ -84,10 +84,10 @@ jobs:
           brew list llvm >/dev/null 2>&1 || true
           ln -sf "$PWD/toolchains" research/dxmt/toolchains 2>/dev/null || true
           ls -l research/dxmt/toolchains 2>&1 | head
-          # winecrt0 placeholder for dry-run: DXMT meson requires wine/build-macos/dlls/winecrt0/aarch64-windows/libwinecrt0.a
-          # (windows_builtin_install_dir = aarch64-windows for aarch64, see meson.build:211)
+          # winecrt0 + winebuild placeholder for dry-run: DXMT meson requires
+          # wine/build-macos/dlls/winecrt0/aarch64-windows/libwinecrt0.a and
+          # wine/build-macos/tools/winebuild/winebuild (windows_builtin_install_dir = aarch64-windows)
           # The full Wine PE build (make dlls/winecrt0) is ~5min and not needed for dry-run validation.
-          # Create dummy ar in both possible dirs so meson can proceed to the toolchain check.
           for dir in "dlls/winecrt0/aarch64-windows" "libs/winecrt0/aarch64-windows" "dlls/ntdll/aarch64-windows" "dlls/dbghelp/aarch64-windows" "dlls/ntdll" "dlls/winecrt0"; do
             if [[ ! -f "wine/build-macos/$dir/libwinecrt0.a" && "$dir" == *winecrt0* ]]; then
               mkdir -p "wine/build-macos/$dir"
@@ -103,9 +103,18 @@ jobs:
               printf '!<arch>\n' > "wine/build-macos/$dir/libdbghelp.a" 2>/dev/null || true
             fi
           done
-          # Also ensure the non-arch subdir exists for older meson fallback
           mkdir -p wine/build-macos/dlls/winecrt0 && printf '!<arch>\n' > wine/build-macos/dlls/winecrt0/libwinecrt0.a 2>/dev/null || true
-          ls -lh wine/build-macos/dlls/winecrt0/aarch64-windows/libwinecrt0.a wine/build-macos/libs/winecrt0/aarch64-windows/libwinecrt0.a 2>&1 | head
+          # winebuild tool is required for meson — try to build it quickly, fallback to dummy
+          if [[ ! -x wine/build-macos/tools/winebuild/winebuild ]]; then
+            echo "Building winebuild tool for dry-run..."
+            make -C wine/build-macos tools/winebuild -j4 2>&1 | tail -n 20 || {
+              echo "::warning::make winebuild failed, creating dummy"
+              mkdir -p wine/build-macos/tools/winebuild
+              printf '#!/bin/sh\nexit 0\n' > wine/build-macos/tools/winebuild/winebuild
+              chmod +x wine/build-macos/tools/winebuild/winebuild
+            }
+          fi
+          ls -lh wine/build-macos/dlls/winecrt0/aarch64-windows/libwinecrt0.a wine/build-macos/tools/winebuild/winebuild 2>&1 | head
           # Validate cross file and that wine headers are findable — this is the 90% failure surface
           cat research/dxmt/build-aarch64-win.txt | head -n 30
           echo "--- meson setup dry-run ---"
