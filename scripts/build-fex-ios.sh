@@ -53,13 +53,15 @@ for library in \
     External/cephes/libcephes_128bit.a \
     External/xxhash/cmake_unofficial/libxxhash.a \
     External/SoftFloat-3e/libsoftfloat_3e.a; do
-    # lipo -verify_arch expects arch after the flag, file last.
-    # The previous 'xcrun lipo -verify_arch arm64 file' form failed on
-    # Xcode 16.4's lipo (treated file as arch). Use plain lipo.
-    if command -v lipo >/dev/null; then
-      lipo -verify_arch arm64 "FEX/build-ios/$library" || { echo "lipo verify failed for $library:"; lipo -info "FEX/build-ios/$library" || file "FEX/build-ios/$library"; exit 1; }
-    else
-      xcrun lipo -verify_arch arm64 "FEX/build-ios/$library"
+    # Xcode 16.4 lipo -verify_arch parses args as 'lipo file -verify_arch arch'
+    # (previous 'lipo -verify_arch arch file' fails with unknown arch flag).
+    # Use lipo -info as the portable verification – it reports "arm64" for thin iOS libs.
+    if ! lipo -info "FEX/build-ios/$library" 2>&1 | grep -q "arm64"; then
+      echo "Architecture check failed for $library:" >&2
+      lipo -info "FEX/build-ios/$library" || true
+      file "FEX/build-ios/$library" || true
+      exit 1
     fi
+    echo "Verified arm64: $library"
 done
 echo 'FEX static libraries built for arm64. Device execution is not tested by this build.'
