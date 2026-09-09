@@ -73,9 +73,16 @@ jobs:
       - name: Fetch wine + FEX
         run: git submodule update --init --recursive --depth 1 wine
       - name: Install Wine build deps
-        run: brew install bison flex 2>&1 | tail -n 20
+        run: |
+          brew install bison flex 2>&1 | tail -n 20
+          echo "/opt/homebrew/opt/bison/bin" >> $GITHUB_PATH
+          echo "/opt/homebrew/opt/flex/bin" >> $GITHUB_PATH
+          /opt/homebrew/opt/bison/bin/bison --version
+          bison --version || true
       - name: Configure Wine for macOS (generates config.h for iOS cross)
         run: |
+          export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:$PATH"
+          bison --version
           cd wine
           mkdir -p build-macos
           # Minimal configure to generate include/config.h and dlls/ntdll headers for the iOS unixlibs.
