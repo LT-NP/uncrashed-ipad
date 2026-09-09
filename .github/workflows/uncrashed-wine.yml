@@ -89,15 +89,35 @@ jobs:
           echo "/opt/homebrew/opt/flex/bin" >> $GITHUB_PATH
           /opt/homebrew/opt/bison/bin/bison --version
           bison --version || true
+      - name: Cache llvm-mingw for Wine PE (aarch64)
+        uses: actions/cache@v4
+        with:
+          path: toolchains/llvm-mingw-20260421-ucrt-macos-universal
+          key: llvm-mingw-20260421-aarch64
+      - name: Fetch llvm-mingw if needed for Wine PE
+        run: |
+          if [[ -d toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin ]]; then echo "llvm-mingw cached"; ls toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin | head; exit 0; fi
+          mkdir -p toolchains
+          curl -L https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/llvm-mingw-20260421-ucrt-macos-universal.tar.xz | tar -xJ -C toolchains/
+          ls toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin | head -n 20
       - name: Configure Wine for macOS (generates config.h for iOS cross)
         run: |
           export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:$PATH"
-          bison --version
+          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:$PATH"
+          bison --version; aarch64-w64-mingw32-clang --version 2>&1 | head -n 5 || true
+          clang --version | head -n 5
           cd wine
           mkdir -p build-macos
           # Minimal configure to generate include/config.h and dlls/ntdll headers for the iOS unixlibs.
           # Uses macOS SDK, not iOS — iOS flags are in build/ntdll-unix/build.sh (xcrun iphoneos).
-          ./configure --enable-win64 --without-x --without-freetype --without-vulkan --disable-tests --prefix=/tmp/wine-ios > ../wine-configure.log 2>&1 || { cat ../wine-configure.log; exit 1; }
+          # aarch64 Wine needs PE cross toolchain (llvm-mingw provides aarch64-w64-mingw32-clang + lld + dlltool).
+          # Fallback without-mingw if toolchain unavailable.
+          if aarch64-w64-mingw32-clang --version >/dev/null 2>&1; then
+            ./configure --enable-win64 --without-x --without-freetype --without-vulkan --disable-tests --prefix=/tmp/wine-ios > ../wine-configure.log 2>&1 || { cat ../wine-configure.log; exit 1; }
+          else
+            echo "::warning::PE toolchain not found, trying --without-mingw"
+            ./configure --enable-win64 --without-mingw --without-x --without-freetype --without-vulkan --disable-tests --prefix=/tmp/wine-ios > ../wine-configure.log 2>&1 || { cat ../wine-configure.log; exit 1; }
+          fi
           head -n 30 build-macos/include/config.h
       - name: Build wineserver iOS lib
         run: bash build/wineserver/build.sh 2>&1 | tee wineserver.log
