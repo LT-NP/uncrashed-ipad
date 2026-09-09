@@ -1,0 +1,36 @@
+name: Uncrashed source and build-input checks
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-checks:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate Xcode project and property lists
+        run: |
+          plutil -lint app/Madeira.xcodeproj/project.pbxproj
+          plutil -lint app/Madeira/Info.plist app/Madeira/Madeira.entitlements
+      - name: Parse Swift source (not type checking or linking)
+        run: xcrun swiftc -frontend -parse app/Madeira/*.swift
+      - name: Check Python and transfer script syntax
+        run: |
+          python3 -m py_compile tools/check-build-inputs.py tools/audit-uncrashed.py
+          bash -n scripts/deploy-uncrashed.sh
+      - name: Inventory missing native build inputs
+        run: python3 tools/check-build-inputs.py --output build-input-audit.json
+      - name: Save input inventory even when prerequisites are missing
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-input-audit
+          path: build-input-audit.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,3 +1,15 @@
+# Uncrashed iPad experiment using Madeira
+
+This local derivative adds an Uncrashed launch entry and work toward reproducible
+iOS builds. **Uncrashed has not been demonstrated running on an iPad.** There is
+no installable Uncrashed IPA yet. See [UNCRASHED.md](UNCRASHED.md) for the current
+status and [the build workflows](.github/workflows) for validation steps.
+
+The original runtime is [willfaust/Madeira](https://github.com/willfaust/Madeira).
+Its README follows; reports of playable games below are upstream reports about
+those games, not Uncrashed compatibility results. No Uncrashed game files are
+included in this repository.
+
 # Madeira
 
 Run Windows PC games on a non-jailbroken iPhone.

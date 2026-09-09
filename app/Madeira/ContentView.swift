@@ -1465,6 +1465,27 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.orange)
 
+                Button("Uncrashed (UE4, DirectX 11)") {
+                    let relativeExe = "wine/drive_c/Program Files/Uncrashed FPV Drone Sim/Uncrashed/Binaries/Win64/Uncrashed-Win64-Shipping.exe"
+                    guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+                          FileManager.default.fileExists(atPath: documents.appendingPathComponent(relativeExe).path) else {
+                        logStore.log("Uncrashed is missing. Copy the full game folder to Documents/wine/drive_c/Program Files/Uncrashed FPV Drone Sim.", level: .error)
+                        return
+                    }
+                    var args = "Uncrashed -dx11 -windowed -ResX=960 -ResY=540 -log"
+                    if let txt = try? String(contentsOf: documents.appendingPathComponent("uncrashed-args.txt"), encoding: .utf8) {
+                        let value = txt.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !value.isEmpty { args = value }
+                    }
+                    setenv("MADEIRA_EXE", "C:\\Program Files\\Uncrashed FPV Drone Sim\\Uncrashed\\Binaries\\Win64\\Uncrashed-Win64-Shipping.exe", 1)
+                    setenv("MADEIRA_ARGS", args, 1)
+                    unsetenv("MADEIRA_DESKTOP")
+                    logStore.log("Uncrashed: args = \(args)")
+                    runWineFullSequence()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.cyan)
+
                 Button("Thumper (standalone)") {
                     // Game lives at Documents/wine/drive_c/Program Files/Thumper/
                     // (push via scripts/deploy-thumper.sh during development;

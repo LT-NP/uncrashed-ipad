@@ -117,6 +117,11 @@ build/x64-tests/asmconf_obj/
 # redistributable terms and only unmodified. Not ours to ship -- obtain them
 # yourself, see tools/fetch-vcruntime.md.
 app/Madeira/x86_64-vcruntime/*.dll
+__pycache__/
+*.pyc
+# Machine-local audit output; do not include in the public build repository.
+/build-input-audit.json
+/uncrashed-audit.json
 research/remote-metal/host/rmetald
 research/remote-metal/guest/rmtest
 
