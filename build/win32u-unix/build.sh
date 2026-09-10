@@ -128,6 +128,9 @@ fi
 if [ $FAILED -gt 0 ]; then
     echo ""
     echo "(not linking — errors in $OBJ_DIR/<name>.err)"
+    for name in $FAILED_FILES; do
+        cat "$OBJ_DIR/$name.err"
+    done
     exit 1
 fi
 

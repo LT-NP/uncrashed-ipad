@@ -78,6 +78,13 @@ jobs:
           mkdir -p wine/build-macos
           cd wine/build-macos
           ../configure --enable-win64 --without-x --without-freetype --without-vulkan --disable-tests --prefix=/tmp/wine-ios > ../../wine-configure.log 2>&1 || { cat ../../wine-configure.log; exit 1; }
+      - name: Generate Wine headers and build FreeType
+        run: |
+          make -C wine/build-macos -j3 include/all 2>&1 | tee wine-headers-build.log
+          git init research/freetype
+          git -C research/freetype fetch --depth 1 https://github.com/freetype/freetype.git 42608f77f20749dd6ddc9e0536788eaad70ea4b5
+          git -C research/freetype checkout --detach FETCH_HEAD
+          bash build/freetype-ios/build.sh 2>&1 | tee freetype-build.log
       - name: Build Wine unix libs
         run: |
           bash build/wineserver/build.sh 2>&1 | tee wineserver-build.log

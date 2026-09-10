@@ -44,11 +44,13 @@ native archives. Eight regression tests cover missing executables, dummy DLLs,
 wrong Mach-O architecture/type, truncated commands and archive inputs. Wine's
 objcopy lookup now uses PATH/Homebrew or an explicit OBJCOPY override.
 
-This is a validation repair, not a complete native build implementation. A clean
-runner will now stop at the missing base Wine server archive instead of patching
-an empty archive and uploading an incomplete IPA. The base server archive and
-LLVM iOS source builds are still required. Local tests passed; a macOS build of
-these changes has not been run.
+Follow-up work replaces the prebuilt Wine server dependency with a full rebuild
+of the 44 C files in the pinned server source manifest, selecting the existing
+iOS replacements. CI also generates Wine headers with `include/all` and builds
+FreeType 2.13.3 from commit `42608f77f20749dd6ddc9e0536788eaad70ea4b5`.
+ntdll now stops after compiler failures rather than attempting to archive stale
+objects. These changes require macOS CI validation; LLVM iOS source compilation
+remains a separate outstanding dependency.
 
 1. Make the installable-IPA job fail on required command failures (`bash` with
    `set -euo pipefail`), retain complete build logs and per-source `.err` files,
