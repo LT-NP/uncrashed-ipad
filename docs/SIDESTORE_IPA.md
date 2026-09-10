@@ -1,27 +1,76 @@
-# Sideload Madeira IPA via SideStore (no Mac per week)
+# Installing a verified Madeira IPA
 
-This guide is for the hosted `macos-15` IPA (`Madeira-unsigned.ipa` from GH `fix/ci-ios-build`).
+The September 10 artifact from run `34445071135` is incomplete: it has no app
+executable. Do not use that artifact for installation. See
+[the build audit](BUILD_AUDIT_2026-09-10.md). The corrected workflow must finish
+compiling and pass bundle validation before the following device steps apply.
 
-**Prerequisites (once):**
-- Windows PC + iPhone/iPad on same WiFi, Apple ID (free = 7-day, 3 apps).
-- Install SideStore: https://docs.sidestore.io/docs/getting-started/ — pair via `SideServer` + `WireGuard` VPN (StikDebug JIT also uses loopback, so VPN must be off during JIT detach).
+## Initial SideStore setup
 
-**Weekly IPA install (GH bypasses friend's Mac):**
-1. GH `Actions` → `fix/ci-ios-build` → latest green `Build IPA (hosted, unsigned)` → download `Madeira-unsigned-ipa` (contains `Payload/Madeira.app`).
-2. SideStore → `My Apps` → `+` → select `Madeira-unsigned.ipa` → sign with your Apple ID (preserves `get-task-allow`+`allow-jit` `app/Madeira/Madeira.entitlements:7`). Free profile expires in 7 days — SideStore refreshes on-device without a Mac.
-3. Trust profile: `Settings → General → VPN & Device Management`.
+Current official instructions use iloader and LocalDevVPN and support initial
+setup from Linux, Windows or macOS:
 
-**First launch on iPad Air M2 26.5.2:**
-- Open Madeira → check `JIT` badge `ContentView.swift:850` — `StikDebug` must be installed, open `stikjit://enable-jit?bundle-id=...` URL (see `StikJITHelper.swift:32`), `CS_DEBUGGED` via `JITAllocator.c:424` `csops`.
-- Enable JIT → allocate `896MB` pool `StikJITHelper.swift:252` `vm_remap` + detach.
-- Test DX11 cube `x64 DX11 cube` button before Uncrashed — should show spinning cube via `build/d3d11-triangle`.
+- [Prerequisites](https://docs.sidestore.io/docs/installation/prerequisites)
+- [Installation](https://docs.sidestore.io/docs/installation/install)
 
-**Deploy Uncrashed (20GB, after JIT + cube ok):**
-- On your Mac (friend's, once): `bash scripts/deploy-uncrashed.sh "/path/to/Uncrashed FPV Drone Sim" DEVICE_ID BUNDLE_ID` (`xcrun devicectl` `appDataContainer` `Documents/wine/drive_c/Program Files/Uncrashed FPV Drone Sim`).
-- Or via `devicectl` from Windows with `libimobiledevice` if available.
-- Launch `Uncrashed (UE4, DirectX 11)` `ContentView.swift:1468` (`-dx11 -windowed -ResX=960 -ResY=540 -log` or `Documents/uncrashed-args.txt` override). First win is splash/renderer init, not gameplay — save `LogStore` + `Saved/Logs`.
+Install LocalDevVPN on the iPad. Install iloader and the platform prerequisites
+on the computer, connect the unlocked iPad by USB, trust the computer and use
+iloader to install SideStore. Follow the iPadOS 26 instructions to trust the
+signing account and enable Developer Mode. Connect LocalDevVPN, sign in to
+SideStore and refresh SideStore itself before installing other apps.
 
-**Troubleshooting:**
-- `JIT` badge red → `StikDebug` not attached, reinstall `StikDebug` via SideStore, retry URL.
-- `VCRuntime` missing → `tools/fetch-vcruntime.sh` locally (GH dummy `MZ` 15 bytes won't run).
-- `Jetsam` `phys_footprint` → `JITAllocator.c:227` `NO_FOOTPRINT` not applied, reduce `896MB` pool or close apps.
+## Install and validate the app
+
+1. Download `Madeira-unsigned-ipa` from a completed build that passed the new
+   bundle-validation steps. Extract the outer artifact ZIP to obtain the IPA.
+2. Transfer the IPA to Files on the iPad. With LocalDevVPN connected, select it
+   using SideStore's My Apps / + flow to sign and install it.
+3. Install and configure [StikDebug](https://github.com/StikDebug/StikDebug),
+   including a valid pairing file for this iPad. Its iOS 26 support depends on
+   the target app. The signed app must support debugger attachment; merely
+   listing entitlements in an unsigned project's source does not prove this.
+4. Open Madeira and validate JIT, then run **x64 DX11 cube**. Preserve debugger
+   logs and Madeira Documents files `madeira-log.txt` and `madeira-log.prev.txt`.
+   A rendered, running cube is the first graphics milestone.
+
+Madeira's automatic helper currently uses a legacy URL scheme and embeds a
+custom debugger script. Its behavior needs testing against the current
+[StikDebug integration](https://github.com/StikDebug/StikJIT/blob/main/INTEGRATION.md).
+Do not interpret a JIT badge alone as proof that the full Wine/FEX runtime works.
+Do not arbitrarily detach the debugger or change the memory pool to mask errors.
+
+## Transfer and launch Uncrashed
+
+After the cube works, copy the full owned game installation (roughly 20 GB) to:
+
+```
+Documents/wine/drive_c/Program Files/Uncrashed FPV Drone Sim/
+```
+
+The shipping executable relative to that directory is:
+
+```
+Uncrashed/Binaries/Win64/Uncrashed-Win64-Shipping.exe
+```
+
+The app enables document sharing. Files / On My iPad / Madeira with external
+storage is a transfer route to verify on the device. The existing scripted
+fallback uses macOS and Xcode, after Madeira initializes its Wine prefix:
+
+```sh
+xcrun devicectl list devices
+bash scripts/deploy-uncrashed.sh "/path/to/Uncrashed FPV Drone Sim" DEVICE_ID INSTALLED_BUNDLE_ID
+```
+
+`devicectl` does not run on Windows through libimobiledevice.
+
+Enable JIT for the app session, then select **Uncrashed (UE4, DirectX 11)**.
+The default arguments are `Uncrashed -dx11 -windowed -ResX=960 -ResY=540 -log`.
+`Documents/uncrashed-args.txt` overrides the entire argument string.
+Save Madeira, debugger and any Unreal `Saved/Logs` output. The first target is a
+splash or renderer initialization, followed by stable gameplay and controls;
+Uncrashed compatibility has not been demonstrated.
+
+Refresh the sideloaded apps before their signatures expire. A free account's
+three active app slots accommodate SideStore, StikDebug and Madeira. See the
+[SideStore FAQ](https://docs.sidestore.io/docs/faq) for refresh behavior and limits.

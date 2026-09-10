@@ -46,7 +46,8 @@ jobs:
       - name: Fetch all submodules (FEX, wine, dxmt)
         run: git submodule update --init --recursive --depth 1
       - name: Restore FEX + GnuTLS + Wine + DXMT caches
-        uses: actions/cache@v4
+        id: native-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             FEX/build-ios
@@ -78,6 +79,18 @@ jobs:
           mkdir -p wine/build-macos
           cd wine/build-macos
           ../configure --enable-win64 --without-x --without-freetype --without-vulkan --disable-tests --prefix=/tmp/wine-ios > ../../wine-configure.log 2>&1 || { cat ../../wine-configure.log; exit 1; }
+      - name: Save completed dependency builds before compiling Wine
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            FEX/build-ios
+            toolchains/gnutls-ios
+            build/gnutls-ios/obj
+            wine/build-macos
+            toolchains/llvm-mingw-20260421-ucrt-macos-universal
+            toolchains/llvm-ios-build
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Generate Wine headers and build FreeType
         run: |
           make -C wine/build-macos -j3 include/all 2>&1 | tee wine-headers-build.log
