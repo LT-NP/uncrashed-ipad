@@ -81,8 +81,19 @@ jobs:
           if [[ -f build/dxmt-ios/obj/*.o ]]; then xcrun -sdk iphoneos libtool -static -o build/dxmt-ios/libdxmt_combined.a build/dxmt-ios/obj/*.o toolchains/llvm-ios-build/lib/*.a 2>/dev/null || xcrun -sdk iphoneos libtool -static -o build/dxmt-ios/libdxmt_combined.a build/dxmt-ios/obj/*.o; fi
           cp build/dxmt-ios/libdxmt_combined.a app/Madeira/ 2>/dev/null || true
           ls -lh app/Madeira/libdxmt_combined.a 2>&1 | head
-      - name: Ensure VCRuntime placeholders (real DLLs via fetch-vcruntime.sh if you have them)
-        run: bash tools/ensure-ci-placeholders.sh; ls -lh app/Madeira/x86_64-vcruntime/ | head -n 20
+      - name: Ensure VCRuntime (real if URL secret, else placeholder)
+        run: |
+          if [[ -n "${VCRUNTIME_URL:-}" ]]; then
+            echo "VCRUNTIME_URL set — fetching real Microsoft DLLs"
+            bash tools/fetch-vcruntime.sh 2>&1 | tail -n 30
+          else
+            echo "::notice::VCRUNTIME_URL not set — using dummy MZ placeholders for CI. Real IPA for Uncrashed needs: bash tools/fetch-vcruntime.sh (see tools/fetch-vcruntime.md) locally before sideload or set GH secret VCRUNTIME_URL"
+            bash tools/ensure-ci-placeholders.sh
+          fi
+          ls -lh app/Madeira/x86_64-vcruntime/ | head -n 20
+          python3 -c "import struct,pathlib; p=pathlib.Path('app/Madeira/x86_64-vcruntime/msvcp140.dll'); d=p.read_bytes() if p.exists() else b''; print('VCRuntime msvcp140.dll', len(d), 'bytes', 'signed' if len(d)>100000 else 'placeholder')"
+        env:
+          VCRUNTIME_URL: ${{ secrets.VCRUNTIME_URL }}
       - name: Xcode build (unsigned, no signing)
         run: |
           xcodebuild -project app/Madeira.xcodeproj -scheme Madeira -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tail -n 100
@@ -102,6 +113,18 @@ jobs:
             xcodebuild -project app/Madeira.xcodeproj -list
             exit 1
           fi
+      - name: Validate IPA bundle (entitlements, JIT, arch)
+        run: |
+          APP=$(find ~/Library/Developer/Xcode/DerivedData -name "Madeira.app" -type d 2>/dev/null | head -n 1)
+          echo "Validating $APP"
+          codesign -d --entitlements - "$APP" 2>&1 | head -n 50 || echo "::warning::codesign entitlements check failed (expected unsigned)"
+          plutil -p "$APP/Info.plist" | head -n 50
+          echo "--- arch check ---"
+          lipo -info "$APP/Madeira" 2>&1 | head || file "$APP/Madeira" | head
+          echo "--- JIT entitlement check ---"
+          codesign -d --entitlements - "$APP" 2>&1 | grep -q "com.apple.security.cs.allow-jit" && echo "JIT entitlement present" || echo "::warning::allow-jit not in entitlements (need get-task-allow + allow-jit for StikDebug)"
+          echo "--- size ---"
+          du -sh "$APP" Payload Madeira-unsigned.ipa 2>&1 | head -n 20
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v5
         with:
