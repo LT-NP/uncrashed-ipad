@@ -1,0 +1,122 @@
+name: Build IPA (hosted, unsigned)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/ci-ios-build]
+    paths:
+      - ".github/workflows/uncrashed-ipa.yml"
+      - "app/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uncrashed-ipa-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Fetch all submodules (FEX, wine, dxmt)
+        run: git submodule update --init --recursive --depth 1
+      - name: Restore FEX + GnuTLS + Wine + DXMT caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            FEX/build-ios
+            toolchains/gnutls-ios
+            build/gnutls-ios/obj
+            wine/build-macos
+            toolchains/llvm-mingw-20260421-ucrt-macos-universal
+            toolchains/llvm-ios-build
+          key: ipa-cache-${{ hashFiles('scripts/build-fex-ios.sh', 'build/gnutls-ios/build.sh', 'wine/configure.ac') }}-v1
+          restore-keys: |
+            ipa-cache-
+      - name: Ensure Wine PE toolchain (llvm-mingw)
+        run: |
+          if [[ -d toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin ]]; then echo "llvm-mingw cached"; exit 0; fi
+          mkdir -p toolchains
+          curl -L https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/llvm-mingw-20260421-ucrt-macos-universal.tar.xz | tar -xJ -C toolchains/
+      - name: Build FEX if not cached
+        run: |
+          if [[ -f FEX/build-ios/FEXCore/Source/libFEXCore.a ]]; then echo "FEX cached"; lipo -info FEX/build-ios/FEXCore/Source/libFEXCore.a | head; exit 0; fi
+          bash scripts/build-fex-ios.sh
+      - name: Build GnuTLS stack if not cached
+        run: |
+          if [[ -f toolchains/gnutls-ios/lib/libgnutls.a ]]; then echo "GnuTLS cached"; exit 0; fi
+          bash build/gnutls-ios/build.sh 2>&1 | tail -n 20
+      - name: Configure Wine if not cached
+        run: |
+          if [[ -f wine/build-macos/include/config.h ]]; then echo "wine config cached"; exit 0; fi
+          brew list bison >/dev/null 2>&1 || brew install bison flex
+          export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:$PATH"
+          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:$PATH"
+          mkdir -p wine/build-macos
+          cd wine/build-macos
+          ../configure --enable-win64 --without-x --without-freetype --without-vulkan --disable-tests --prefix=/tmp/wine-ios > ../../wine-configure.log 2>&1 || { cat ../../wine-configure.log; exit 1; }
+      - name: Build Wine unix libs
+        run: |
+          bash tools/ensure-ci-placeholders.sh
+          bash build/wineserver/build.sh 2>&1 | tail -n 20
+          bash build/ntdll-unix/build.sh 2>&1 | tail -n 20
+          bash build/win32u-unix/build.sh 2>&1 | tail -n 20 || echo "::warning::win32u partial"
+          ls -lh app/Madeira/libwineserver.a app/Madeira/libntdll_unix.a || true
+      - name: Build DXMT (PE + unix) if not cached
+        run: |
+          if [[ -f app/Madeira/libdxmt_combined.a && -f app/Madeira/aarch64-windows/d3d11.dll ]]; then echo "DXMT cached"; ls -lh app/Madeira/libdxmt_combined.a app/Madeira/aarch64-windows/*.dll | head; exit 0; fi
+          ln -sf "$PWD/toolchains" research/dxmt/toolchains 2>/dev/null || true
+          # Dummy winecrt0/winebuild for meson if not yet built
+          mkdir -p wine/build-macos/dlls/winecrt0/aarch64-windows wine/build-macos/tools/winebuild
+          printf '!<arch>\n' > wine/build-macos/dlls/winecrt0/aarch64-windows/libwinecrt0.a 2>/dev/null || true
+          printf '#!/bin/sh\nexit 0\n' > wine/build-macos/tools/winebuild/winebuild; chmod +x wine/build-macos/tools/winebuild/winebuild
+          bash build/dxmt-ios/build.sh 2>&1 | tail -n 30 || echo "::warning::DXMT unix partial"
+          if [[ -f build/dxmt-ios/obj/*.o ]]; then xcrun -sdk iphoneos libtool -static -o build/dxmt-ios/libdxmt_combined.a build/dxmt-ios/obj/*.o toolchains/llvm-ios-build/lib/*.a 2>/dev/null || xcrun -sdk iphoneos libtool -static -o build/dxmt-ios/libdxmt_combined.a build/dxmt-ios/obj/*.o; fi
+          cp build/dxmt-ios/libdxmt_combined.a app/Madeira/ 2>/dev/null || true
+          ls -lh app/Madeira/libdxmt_combined.a 2>&1 | head
+      - name: Ensure VCRuntime placeholders (real DLLs via fetch-vcruntime.sh if you have them)
+        run: bash tools/ensure-ci-placeholders.sh; ls -lh app/Madeira/x86_64-vcruntime/ | head -n 20
+      - name: Xcode build (unsigned, no signing)
+        run: |
+          xcodebuild -project app/Madeira.xcodeproj -scheme Madeira -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tail -n 100
+          echo "Build finished — checking app bundle"
+          find ~/Library/Developer/Xcode/DerivedData -name "Madeira.app" -type d 2>/dev/null | head -n 5
+          APP=$(find ~/Library/Developer/Xcode/DerivedData -name "Madeira.app" -type d 2>/dev/null | head -n 1)
+          if [[ -n "$APP" ]]; then
+            echo "Found $APP"
+            ls -lh "$APP" | head -n 30
+            # Create unsigned IPA (Payload/Madeira.app)
+            mkdir -p Payload
+            cp -R "$APP" Payload/
+            zip -r Madeira-unsigned.ipa Payload 2>&1 | tail -n 20
+            ls -lh Madeira-unsigned.ipa
+          else
+            echo "::warning::Madeira.app not found in DerivedData — check xcodebuild log"
+            xcodebuild -project app/Madeira.xcodeproj -list
+            exit 1
+          fi
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v5
+        with:
+          name: Madeira-unsigned-ipa
+          path: Madeira-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
+      - name: Save build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: ipa-build-logs
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/**/Logs/Build/*.log
+            wine-configure.log
+            build/gnutls-ios/obj/*.log
+          if-no-files-found: warn
+          retention-days: 7
