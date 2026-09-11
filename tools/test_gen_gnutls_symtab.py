@@ -68,11 +68,15 @@ class GenSymtabTests(unittest.TestCase):
         defined = names[:20]
         with open(archive, 'wb') as stream:
             stream.write(b'!<arch>\n')
-            stream.write(ar_member('gnutls.o', macho64(['_' + n for n in defined])))
+            # Real GnuTLS archives contain thousands of symbols. A tiny fixture
+            # misses Bash 3.2's slow full-list pattern replacement on macOS.
+            symbols = ['_' + n for n in defined]
+            symbols += [f'_unused_gnutls_symbol_{i:05d}' for i in range(2500)]
+            stream.write(ar_member('gnutls.o', macho64(symbols)))
         out = tmp / 'symtab.c'
         env = dict(os.environ, GNUTLS_LIB_OVERRIDE=str(archive), SYMTAB_OUT=str(out))
         proc = subprocess.run(['bash', str(SCRIPT)], capture_output=True, text=True, env=env,
-                              timeout=120)
+                              timeout=10)
         self.assertEqual(proc.returncode, 0, f'stdout={proc.stdout}\nstderr={proc.stderr}')
         generated = out.read_text(encoding='utf-8')
         self.assertIn('ios_gnutls_symtab[]', generated)
@@ -88,7 +92,7 @@ class GenSymtabTests(unittest.TestCase):
                    GNUTLS_LIB_OVERRIDE=str(tmp / 'absent.a'),
                    SYMTAB_OUT=str(tmp / 'symtab.c'))
         proc = subprocess.run(['bash', str(SCRIPT)], capture_output=True, text=True, env=env,
-                              timeout=120)
+                              timeout=10)
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn('ERROR', proc.stderr)
 
