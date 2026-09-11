@@ -42,7 +42,7 @@ wanted=$( {
     grep -hoE 'dlsym\([^,]+,[[:space:]]*"[A-Za-z0-9_]+"' "${SOURCES[@]}" \
         | sed -E 's/.*"([A-Za-z0-9_]+)".*/\1/'
 } | grep -v '^f$' | sort -u )   # '^f$' = the LOAD_FUNCPTR(f) macro definition itself
-if [[ -z "${wanted//[[:space:]]/}" ]]; then
+if [[ -z "$wanted" ]]; then
     echo "ERROR: no wanted GnuTLS symbols found in Wine sources" >&2
     exit 1
 fi
@@ -54,7 +54,10 @@ fi
 # stripped by the parser.
 echo "listing defined symbols in $GNUTLS_LIB ..."
 available=$(python3 "$REPO_ROOT/tools/ar-macho-symbols.py" "$GNUTLS_LIB")
-if [[ -z "${available//[[:space:]]/}" ]]; then
+# The parser emits nonempty symbol names, so a plain empty check suffices.
+# Avoid global pattern substitution over the full symbol list in macOS Bash 3.2.
+echo "archive symbol scan completed"
+if [[ -z "$available" ]]; then
     echo "ERROR: no defined symbols in $GNUTLS_LIB (build gnutls-ios first)" >&2
     exit 1
 fi
