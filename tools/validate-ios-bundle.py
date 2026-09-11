@@ -1,8 +1,10 @@
 """Reject incomplete unsigned Madeira bundles; does not prove runtime compatibility."""
 import argparse
+import io
 import plistlib
 import struct
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -62,12 +64,7 @@ def pe(data, machine):
         require(size == 0 or start + size <= len(data), 'truncated PE section')
 
 
-def bundle(read):
-    info = plistlib.loads(read('Info.plist'))
-    executable = info.get('CFBundleExecutable', '')
-    require(executable and Path(executable).name == executable,
-            'invalid CFBundleExecutable')
-    macho(read(executable), 2)
+def runtime_resources(read):
     for name in ('concrt140', 'msvcp140', 'msvcp140_1', 'msvcp140_2',
                  'msvcp140_atomic_wait', 'msvcp140_codecvt_ids', 'vcamp140',
                  'vccorlib140', 'vcomp140', 'vcruntime140', 'vcruntime140_1',
@@ -75,8 +72,31 @@ def bundle(read):
         pe(read(f'x86_64-vcruntime/{name}.dll'), 0x8664)
     for name in ('d3d11', 'dxgi', 'winemetal', 'd3d10core'):
         pe(read(f'aarch64-windows/{name}.dll'), 0xAA64)
+    for directory, machine in (('aarch64-windows', 0xAA64),
+                               ('arm64ec-windows', 0x8664)):
+        for name in ('ntdll', 'kernel32', 'kernelbase', 'user32', 'win32u'):
+            pe(read(f'{directory}/{name}.dll'), machine)
+    pe(read('arm64ec-windows/xtajit64.dll'), 0x8664)
     pe(read('arm64ec-windows/cube-x64.exe'), 0x8664)
-    require(read('prefix-template.tar.gz')[:2] == b'\x1f\x8b', 'missing prefix gzip')
+    with tarfile.open(fileobj=io.BytesIO(read('prefix-template.tar.gz')), mode='r:gz') as prefix:
+        for name in ('system.reg', 'user.reg', 'userdef.reg'):
+            member = prefix.getmember(f'prefix/{name}')
+            require(member.isfile() and member.size > 0, f'missing prefix registry: {name}')
+            require(len(prefix.extractfile(member).read()) == member.size,
+                    f'truncated prefix registry: {name}')
+        require(prefix.getmember('prefix/drive_c/windows/system32').isdir(),
+                'missing prefix system32 directory')
+
+
+def bundle(read):
+    info = plistlib.loads(read('Info.plist'))
+    if not isinstance(info, dict):
+        raise ValueError('Info.plist root is not a dictionary')
+    executable = info.get('CFBundleExecutable', '')
+    require(executable and Path(executable).name == executable,
+            'invalid CFBundleExecutable')
+    macho(read(executable), 2)
+    runtime_resources(read)
 
 
 def main():
@@ -85,17 +105,21 @@ def main():
     group.add_argument('--app', type=Path)
     group.add_argument('--ipa', type=Path)
     group.add_argument('--archive', type=Path)
+    group.add_argument('--resources', type=Path,
+                       help='validate runtime inputs before compiling the app')
     args = parser.parse_args()
     try:
         if args.archive:
             archive(args.archive)
+        elif args.resources:
+            runtime_resources(lambda name: (args.resources / name).read_bytes())
         elif args.app:
             bundle(lambda name: (args.app / name).read_bytes())
         else:
             with zipfile.ZipFile(args.ipa) as package:
                 bundle(lambda name: package.read('Payload/Madeira.app/' + name))
-    except (OSError, ValueError, KeyError, struct.error, zipfile.BadZipFile,
-            plistlib.InvalidFileException) as error:
+    except (OSError, ValueError, KeyError, AttributeError, RuntimeError, struct.error, zipfile.BadZipFile,
+            plistlib.InvalidFileException, tarfile.TarError, EOFError) as error:
         print(f'INVALID: {error}', file=sys.stderr)
         return 1
     print('Structural validation passed; signing and device execution remain untested.')

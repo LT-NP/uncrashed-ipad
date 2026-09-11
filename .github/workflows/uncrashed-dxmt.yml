@@ -16,6 +16,8 @@ jobs:
   dxmt-check:
     runs-on: macos-15
     timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@v5
         with:
@@ -50,8 +52,11 @@ jobs:
           cat /tmp/dxmt-audit.json | python3 -m json.tool | head -n 40
 
   dxmt-dryrun:
+    needs: dxmt-check
     runs-on: macos-15
     timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@v5
         with:
@@ -71,12 +76,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: toolchains/llvm-mingw-20260421-ucrt-macos-universal
-          key: llvm-mingw-20260421-aarch64
+          key: llvm-mingw-20260421-${{ runner.arch }}-xcode26.3
       - name: Fetch llvm-mingw if missing
         run: |
           if [[ -d toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin ]]; then echo "llvm-mingw cached"; exit 0; fi
           mkdir -p toolchains
-          curl -L https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/llvm-mingw-20260421-ucrt-macos-universal.tar.xz | tar -xJ -C toolchains/
+          curl --fail --silent --show-error --location --retry 3 --connect-timeout 30 --max-time 600 --proto '=https' --proto-redir '=https' https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/llvm-mingw-20260421-ucrt-macos-universal.tar.xz | tar -xJ -C toolchains/
           ls toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin | head -n 20
       - name: Meson setup dry-run (no compile, ~2min)
         run: |
@@ -128,8 +133,11 @@ jobs:
 
   dxmt-build:
     if: github.event_name == 'workflow_dispatch'
+    needs: dxmt-dryrun
     runs-on: macos-15
     timeout-minutes: 150
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@v5
         with:
@@ -144,12 +152,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: toolchains/llvm-mingw-20260421-ucrt-macos-universal
-          key: llvm-mingw-20260421-aarch64
+          key: llvm-mingw-20260421-${{ runner.arch }}-xcode26.3
       - name: Fetch llvm-mingw
         run: |
           if [[ -d toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin ]]; then echo "llvm-mingw cached"; exit 0; fi
           mkdir -p toolchains
-          curl -L https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/llvm-mingw-20260421-ucrt-macos-universal.tar.xz | tar -xJ -C toolchains/
+          curl --fail --silent --show-error --location --retry 3 --connect-timeout 30 --max-time 600 --proto '=https' --proto-redir '=https' https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/llvm-mingw-20260421-ucrt-macos-universal.tar.xz | tar -xJ -C toolchains/
       - name: Cache llvm-ios-build (2hr)
         uses: actions/cache@v4
         with:
@@ -180,7 +188,7 @@ jobs:
           if [[ ! -f wine/build-macos/include/config.h ]]; then echo "::warning::wine/build-macos not ready — DXMT PE may fail"; fi
           # PE side
           SDKROOT=$(xcrun --sdk macosx --show-sdk-path) PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/bin:$PATH" \
-            meson setup --cross-file research/dxmt/build-aarch64-win.txt --native-file research/dxmt/build-osx.txt -Dwine_build_path="$PWD/wine/build-macos" /tmp/dxmt-build research/dxmt 2>&1 | tee /tmp/meson-full.log | tail -n 50
+            meson setup --cross-file research/dxmt/build-aarch64-win.txt --native-file research/dxmt/build-osx.txt -Dwine_build_path="$PWD/wine/build-macos" /tmp/dxmt-build research/dxmt 2>&1 | tee meson-full.log | tail -n 50
           SDKROOT=$(xcrun --sdk macosx --show-sdk-path) PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/bin:$PATH" \
             meson compile -C /tmp/dxmt-build 2>&1 | tail -n 100 || echo "::warning::DXMT PE compile failed — continuing to unix"
           # Unix side (needs LLVM headers if present, else dummy)
@@ -202,6 +210,6 @@ jobs:
             app/Madeira/libdxmt_combined.a
             app/Madeira/aarch64-windows/*.dll
             dxmt-unix.log
-            /tmp/meson-full.log
+            meson-full.log
           if-no-files-found: warn
           retention-days: 7

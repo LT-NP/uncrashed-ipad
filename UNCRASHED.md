@@ -16,11 +16,16 @@ games playable, which is not evidence that Uncrashed works.
 
 - `app/Madeira/ContentView.swift`: Uncrashed launch button, missing-file check,
   direct shipping-executable launch and default arguments
-  `Uncrashed -dx11 -windowed -ResX=960 -ResY=540 -log`.
+  `Uncrashed -dx11 -windowed -ResX=1024 -ResY=768 -log` (1024x768 matches the
+  Wine monitor, MetalHost gameRect, and touch mapping; override via file below).
 - `Documents/uncrashed-args.txt` may override the complete argument string without
   rebuilding. The game may suppress logs in its shipping configuration.
+- `app/Madeira/Info.plist`: explicit iPad orientations plus `UIRequiresFullScreen`
+  so the 4:3 surface is not resized by multitasking; landscape attaches the
+  window-level touch-controls overlay (iPad often launches straight to landscape).
 - `scripts/deploy-uncrashed.sh`: copies the full owned installation using Apple's
-  `devicectl`; requires an installed app and initialized Wine prefix.
+  `devicectl`; requires an installed app and initialized Wine prefix. Now refuses
+  trees with <5 paks and runs the read-only audit when available.
 - `tools/audit-uncrashed.py`: read-only PE import and packaging inspection.
   `uncrashed-audit.json` records the actual local installation.
 - Fixed Xcode library references that pointed outside this repository or to

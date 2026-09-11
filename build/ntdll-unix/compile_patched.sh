@@ -1,14 +1,18 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
 WINE_SRC="$REPO_ROOT/wine"
 WINE_BUILD="$WINE_SRC/build-macos"
+command -v xcrun >/dev/null || { echo "ERROR: Wine iOS builds require macOS with Xcode (xcrun not found)." >&2; exit 1; }
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 OBJ_DIR="$BUILD_DIR/obj"
 APP_LIB="$REPO_ROOT/app/Madeira/libntdll_unix.a"
 
+# This developer shortcut updates a previously completed full build. A missing
+# or placeholder base cannot be repaired by compiling only these five files.
+python3 "$REPO_ROOT/tools/validate-ios-bundle.py" --archive "$OBJ_DIR/libntdll_unix.a"
 mkdir -p "$OBJ_DIR"
 
 compile_one() {
@@ -52,8 +56,7 @@ echo "=== Rebuilding libntdll_unix.a ==="
 # Update existing archive with recompiled objects
 if [ -f "$OBJ_DIR/libntdll_unix.a" ]; then
     for obj in loader.o process.o server.o virtual.o signal_arm64.o; do
-        ar d "$OBJ_DIR/libntdll_unix.a" "$obj" 2>/dev/null || true
-        ar r "$OBJ_DIR/libntdll_unix.a" "$OBJ_DIR/$obj"
+        xcrun --sdk iphoneos ar rcs "$OBJ_DIR/libntdll_unix.a" "$OBJ_DIR/$obj"
     done
 else
     echo "ERROR: No base libntdll_unix.a — run build.sh first"
@@ -61,6 +64,7 @@ else
 fi
 
 echo "Copying to app..."
+python3 "$REPO_ROOT/tools/validate-ios-bundle.py" --archive "$OBJ_DIR/libntdll_unix.a"
 cp "$OBJ_DIR/libntdll_unix.a" "$APP_LIB"
 echo "libntdll_unix.a: $(wc -c < "$APP_LIB" | tr -d ' ') bytes"
 echo "Done!"

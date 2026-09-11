@@ -9,7 +9,7 @@
 # wrote there until Marvel Cosmic Invasion.
 #
 # Run from the repo root. Exit 1 makes the offending archive impossible to ship.
-set -e
+set -eu
 ARCHIVE="${1:-app/Madeira/prefix-template.tar.gz}"
 [ -f "$ARCHIVE" ] || { echo "check-prefix-template: no such archive: $ARCHIVE" >&2; exit 1; }
 

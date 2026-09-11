@@ -65,7 +65,8 @@ bash scripts/deploy-uncrashed.sh "/path/to/Uncrashed FPV Drone Sim" DEVICE_ID IN
 `devicectl` does not run on Windows through libimobiledevice.
 
 Enable JIT for the app session, then select **Uncrashed (UE4, DirectX 11)**.
-The default arguments are `Uncrashed -dx11 -windowed -ResX=960 -ResY=540 -log`.
+The default arguments are `Uncrashed -dx11 -windowed -ResX=1024 -ResY=768 -log`
+(1024x768 matches the Wine monitor and touch mapping).
 `Documents/uncrashed-args.txt` overrides the entire argument string.
 Save Madeira, debugger and any Unreal `Saved/Logs` output. The first target is a
 splash or renderer initialization, followed by stable gameplay and controls;

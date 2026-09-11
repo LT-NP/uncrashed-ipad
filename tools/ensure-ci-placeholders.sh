@@ -10,16 +10,16 @@ mkdir -p "$REPO_ROOT/app/Madeira"
 mkdir -p "$REPO_ROOT/app/Madeira/x86_64-vcruntime"
 mkdir -p "$REPO_ROOT/toolchains/gnutls-ios/lib"
 
-# Dummy ar for missing Wine/DXMT libs — 8-byte magic + tiny member
+# Dummy ar for missing Wine/DXMT libs — 8-byte magic only.
+# check-build-inputs reports these as 'present' for dry-run Xcode validation,
+# but validate-ios-bundle.py rejects them ('empty/placeholder archive'): they
+# must be overwritten by real builds before any device IPA. Re-running this
+# helper never overwrites an existing file, real or placeholder.
 make_dummy_ar() {
   local out="$1"
   if [[ -f "$out" ]]; then echo "keep $out"; return; fi
   printf '!<arch>\n' > "$out"
-  # Add a tiny member so ar is non-empty (some linkers reject empty)
-  echo "placeholder" | ar rcs "$out" --plugin 2>/dev/null || true
-  # Fallback: ensure magic
-  if [[ $(head -c 8 "$out") != '!<arch>' ]]; then printf '!<arch>\n' | cat - "$out" > "$out.tmp" && mv "$out.tmp" "$out"; fi
-  echo "created placeholder $out"
+  echo "created placeholder $out (CI dry-run only; real build must overwrite)"
 }
 
 # Wine/DXMT libs expected by Xcode

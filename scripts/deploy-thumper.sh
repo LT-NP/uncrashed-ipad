@@ -5,12 +5,26 @@
 #
 # This is the dev-iteration path. For distribution, the game would be bundled
 # in the .app and extracted on first launch via PrefixExtractor (TODO).
-set -eu
+#
+# Usage: bash scripts/deploy-thumper.sh [SRC_DIR [DEVICE_ID [BUNDLE_ID]]]
+# Defaults honor THUMPER_SRC_DIR / DEVICE_ID / BUNDLE_ID for local iteration
+# without editing the script.
+set -euo pipefail
 
-DEVICE_ID="00008110-000568DA2EDA801E"
-BUNDLE_ID="com.madeira.emulator"
-SRC_DIR="/Users/willfaust/Documents/ios-pc-game-claude/research/Games/Thumper"
+DEVICE_ID="${2:-${DEVICE_ID:-}}"
+BUNDLE_ID="${3:-${BUNDLE_ID:-com.madeira.emulator}}"
+SRC_DIR="${1:-${THUMPER_SRC_DIR:-}}"
 DST_PATH='Documents/wine/drive_c/Program Files/Thumper'
+
+if [[ -z "$SRC_DIR" ]]; then
+    echo "Usage: bash $0 SRC_DIR [DEVICE_ID [BUNDLE_ID]]" >&2
+    echo "  or set THUMPER_SRC_DIR (and optionally DEVICE_ID)." >&2
+    exit 2
+fi
+if [[ -z "$DEVICE_ID" ]]; then
+    echo "DEVICE_ID is required (arg or env)." >&2
+    exit 2
+fi
 
 if [[ ! -d "$SRC_DIR" ]]; then
     echo "Source directory not found: $SRC_DIR"
@@ -35,8 +49,7 @@ xcrun devicectl device copy to \
     --source "$SRC_DIR" \
     --destination "$DST_PATH" \
     --domain-type appDataContainer \
-    --domain-identifier "$BUNDLE_ID" \
-    2>&1 | tail -20
+    --domain-identifier "$BUNDLE_ID"
 
 echo ""
 echo "==> Done. Tap 'Run Thumper (D3D11 / win10)' in the Madeira app to launch."

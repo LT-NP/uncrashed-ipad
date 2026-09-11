@@ -1,12 +1,17 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
 WINE_SRC="$REPO_ROOT/wine"
+command -v xcrun >/dev/null || { echo "ERROR: Wine iOS builds require macOS with Xcode (xcrun not found)." >&2; exit 1; }
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 APP_LIB="$REPO_ROOT/app/Madeira/libwineserver.a"
 SHIMS_DIR="$REPO_ROOT/build/ntdll-unix/shims"
+[[ -s "$WINE_SRC/build-macos/include/config.h" ]] || {
+    echo "ERROR: generated Wine config.h missing; run scripts/prepare-wine-ios.sh." >&2
+    exit 1
+}
 
 # Object files and library go in build dir
 OBJ_DIR="$BUILD_DIR/obj"
@@ -55,9 +60,7 @@ PATCHED_FILES=(
     "mach_ios:mach_ios.c:mach.o"
     "unicode_ios:unicode_ios.c:unicode.o"
     "fd_ios:fd_ios.c:fd.o"
-    # ml574: object.c must appear in BOTH lists — SOURCES compiles it,
-    # REPLACEMENTS inserts it into the prebuilt base archive. An entry in
-    # only the first compiles, prints OK, and is silently discarded.
+    # Build these patched upstream files directly from the pinned submodule.
     "object:$WINE_SRC/server/object.c:object.o"
     # ml575: async.c carries the free_async_queue UAF fix.
     "async:$WINE_SRC/server/async.c:async.o"
@@ -133,7 +136,7 @@ compile_one "$BUILD_DIR/wine_log_ios.c" wine_log_ios
 OBJECTS+=("$OBJ_DIR/wine_log_ios.o")
 # Build into a fresh archive; stale or removed source objects must not survive.
 rm -f "$OBJ_DIR/libwineserver.a"
-ar rcs "$OBJ_DIR/libwineserver.a" "${OBJECTS[@]}"
+xcrun --sdk iphoneos ar rcs "$OBJ_DIR/libwineserver.a" "${OBJECTS[@]}"
 
 echo "=== Renaming colliding symbols in every .o (objcopy sweep) ==="
 # Renames internal-to-archive: extract every .o, rename the 10 symbols
@@ -180,12 +183,12 @@ for s in "${COLLISIONS[@]}"; do
 done
 TMP_RENAME_DIR="$OBJ_DIR/rename"
 rm -rf "$TMP_RENAME_DIR" && mkdir -p "$TMP_RENAME_DIR"
-(cd "$TMP_RENAME_DIR" && ar x "$OBJ_DIR/libwineserver.a")
+(cd "$TMP_RENAME_DIR" && xcrun --sdk iphoneos ar x "$OBJ_DIR/libwineserver.a")
 for f in "$TMP_RENAME_DIR"/*.o; do
     "$OBJCOPY" "${RENAME_ARGS[@]}" "$f"
 done
 rm "$OBJ_DIR/libwineserver.a"
-ar rcs "$OBJ_DIR/libwineserver.a" "$TMP_RENAME_DIR"/*.o
+xcrun --sdk iphoneos ar rcs "$OBJ_DIR/libwineserver.a" "$TMP_RENAME_DIR"/*.o
 rm -rf "$TMP_RENAME_DIR"
 echo "  symbol rename + repack OK"
 

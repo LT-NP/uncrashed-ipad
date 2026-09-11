@@ -55,14 +55,17 @@ def inspect(root):
             checks.append(dict(path=path, status='outside_repository'))
             continue
         status = 'present' if target.exists() else 'missing'
-        if target.is_file():
-            if target.stat().st_size == 0:
-                status = 'empty'
-            elif target.suffix == '.a':
-                with target.open('rb') as stream:
-                    magic = stream.read(8)
-                if magic != b'!<arch>\n' and magic[:4] not in (b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf'):
-                    status = 'invalid_archive'
+        try:
+            if target.is_file():
+                if target.stat().st_size == 0:
+                    status = 'empty'
+                elif target.suffix == '.a':
+                    with target.open('rb') as stream:
+                        magic = stream.read(8)
+                    if magic != b'!<arch>\n' and magic[:4] not in (b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf'):
+                        status = 'invalid_archive'
+        except OSError:
+            status = 'missing'
         checks.append(dict(path=relative, status=status))
     if not checks:
         raise ValueError('No project inputs parsed')
@@ -79,7 +82,11 @@ def inspect(root):
         'app/Madeira/x86_64-vcruntime/vcruntime140_1.dll',
     ):
         p = root / relative
-        checks.append(dict(path=relative, status='present' if p.is_file() and p.stat().st_size else 'missing'))
+        try:
+            ok = p.is_file() and p.stat().st_size > 0
+        except OSError:
+            ok = False
+        checks.append(dict(path=relative, status='present' if ok else 'missing'))
     return dict(scope='project input presence only; compile and device tests still required',
                 ready_for_compile_attempt=all(c['status'] == 'present' for c in checks), checks=checks)
 
@@ -89,9 +96,18 @@ def main():
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
-    report = inspect(args.root)
-    if args.output:
-        args.output.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+    try:
+        report = inspect(args.root)
+    except (OSError, ValueError) as error:
+        print(f"check-build-inputs failed: {error}", file=sys.stderr)
+        return 2
+    try:
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+    except OSError as error:
+        print(f"Failed to write output {args.output}: {error}", file=sys.stderr)
+        return 2
     for check in report['checks']:
         if check['status'] != 'present':
             hint = ""

@@ -13,7 +13,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT="$REPO_ROOT/app/Madeira/prefix-template.tar.gz"
 
-WORK_DIR="$(mktemp -d /Users/"$USER"/madeira-prefix-build.XXXXXX)"
+if [[ "$(uname -s)" != Darwin ]]; then
+    echo "error: prefix snapshots require macOS (Wine + BSD sed)." >&2
+    exit 1
+fi
+
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/madeira-prefix-build.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 PREFIX="$WORK_DIR/prefix"
 
@@ -22,6 +27,11 @@ WINEBOOT_BIN="${WINEBOOT:-/opt/homebrew/bin/wineboot}"
 
 if [[ ! -x "$WINE_BIN" ]]; then
     echo "error: wine not found at $WINE_BIN (override with WINE=...)" >&2
+    exit 1
+fi
+
+if [[ ! -x "$WINEBOOT_BIN" ]]; then
+    echo "error: wineboot not found at $WINEBOOT_BIN (override with WINEBOOT=...)" >&2
     exit 1
 fi
 

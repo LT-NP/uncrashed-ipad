@@ -20,18 +20,21 @@ jobs:
   gnutls-ios:
     runs-on: macos-15
     timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
           fetch-depth: 1
+          submodules: false
       - name: Cache GnuTLS build (GMP/Nettle/GnuTLS obj + toolchain)
         uses: actions/cache@v4
         with:
           path: |
             toolchains/gnutls-ios
             build/gnutls-ios/obj
-          key: gnutls-ios-${{ hashFiles('build/gnutls-ios/src/SHA256SUMS', 'build/gnutls-ios/build.sh') }}-aarch64
+          key: gnutls-ios-${{ runner.arch }}-xcode26.3-${{ hashFiles('build/gnutls-ios/src/SHA256SUMS', 'build/gnutls-ios/build.sh') }}
           restore-keys: |
             gnutls-ios-
       - name: Prepare build tools
@@ -43,14 +46,16 @@ jobs:
           # Ensure tarballs are present (tracked)
           ls -lh build/gnutls-ios/src/
           cat build/gnutls-ios/src/SHA256SUMS
-          shasum -a 256 -c build/gnutls-ios/src/SHA256SUMS || echo "::warning::SHA mismatch but continuing (tracked tarballs should match)"
+          (cd build/gnutls-ios/src && shasum -a 256 -c SHA256SUMS)
       - name: Build GMP/Nettle/GnuTLS for iOS
         run: |
           set -x
           bash build/gnutls-ios/build.sh 2>&1 | tee gnutls-build.log
           echo "=== libs ==="
           ls -lh toolchains/gnutls-ios/lib/*.a
-          lipo -info toolchains/gnutls-ios/lib/*.a || true
+          for lib in gmp nettle hogweed gnutls; do
+            python3 tools/validate-ios-bundle.py --archive "toolchains/gnutls-ios/lib/lib$lib.a"
+          done
           file toolchains/gnutls-ios/lib/*.a | head -n 20
       - name: Save GnuTLS static libs
         uses: actions/upload-artifact@v5

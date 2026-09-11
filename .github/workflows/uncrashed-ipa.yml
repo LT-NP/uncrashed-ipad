@@ -10,6 +10,10 @@ on:
       - "build/**"
       - "scripts/**"
       - "tools/**"
+      - "patches/**"
+      - "FEX/**"
+      - "wine/**"
+      - "research/dxmt/**"
 
 permissions:
   contents: read
@@ -21,31 +25,38 @@ concurrency:
 jobs:
   ipa:
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 300
     defaults:
       run:
         shell: bash
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      BUILD_JOBS: 3
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
           fetch-depth: 1
           submodules: false
-      - name: Test bundle validation
-        run: python3 tools/test_validate_ios_bundle.py
+      - name: Test runtime and bundle validation
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
       - name: Verify Xcode and install native tools
         run: |
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
-          brew install llvm bison flex
+          brew install llvm bison flex cmake ninja meson sevenzip
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
-      - name: Fetch all submodules (FEX, wine, dxmt)
+      - name: Fetch all submodules (FEX, Wine, DXMT)
         run: git submodule update --init --recursive --depth 1
-      - name: Restore FEX + GnuTLS + Wine + DXMT caches
+      - name: Record dependency revisions
+        id: revisions
+        run: |
+          echo "fex=$(git -C FEX rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "wine=$(git -C wine rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "dxmt=$(git -C research/dxmt rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Restore FEX, GnuTLS and Wine dependencies
         id: native-cache
         uses: actions/cache/restore@v4
         with:
@@ -55,31 +66,44 @@ jobs:
             build/gnutls-ios/obj
             wine/build-macos
             toolchains/llvm-mingw-20260421-ucrt-macos-universal
-            toolchains/llvm-ios-build
-          key: ipa-cache-${{ hashFiles('scripts/build-fex-ios.sh', 'build/gnutls-ios/build.sh', 'wine/configure.ac') }}-xcode26.3-v2
-      - name: Ensure Wine PE toolchain (llvm-mingw)
+          key: ipa-native-${{ runner.arch }}-xcode26.3-${{ steps.revisions.outputs.fex }}-${{ steps.revisions.outputs.wine }}-${{ steps.revisions.outputs.dxmt }}-${{ hashFiles('scripts/build-fex-ios.sh', 'scripts/prepare-wine-ios.sh', 'patches/fex-ios-arm64-mbi.patch', 'build/gnutls-ios/build.sh', 'build/gnutls-ios/src/SHA256SUMS') }}
+      - name: Build and validate FEX
         run: |
-          if [[ -d toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin ]]; then echo "llvm-mingw cached"; exit 0; fi
-          mkdir -p toolchains
-          curl --fail --location https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/llvm-mingw-20260421-ucrt-macos-universal.tar.xz | tar -xJ -C toolchains/
-      - name: Build FEX if not cached
+          libraries=(
+            FEXCore/Source/libFEXCore.a FEXCore/Source/libFEXCore_Base.a
+            FEXCore/Source/libJemallocLibs.a External/fmt/libfmt.a
+            External/cephes/libcephes_128bit.a
+            External/xxhash/cmake_unofficial/libxxhash.a
+            External/SoftFloat-3e/libsoftfloat_3e.a
+          )
+          valid=true
+          for library in "${libraries[@]}"; do
+            python3 tools/validate-ios-bundle.py --archive "FEX/build-ios/$library" || valid=false
+          done
+          if [[ "$valid" != true ]]; then
+            bash scripts/build-fex-ios.sh 2>&1 | tee fex-build.log
+          fi
+          for library in "${libraries[@]}"; do
+            python3 tools/validate-ios-bundle.py --archive "FEX/build-ios/$library"
+          done
+      - name: Build and stage GnuTLS stack
         run: |
-          if [[ -f FEX/build-ios/FEXCore/Source/libFEXCore.a ]]; then echo "FEX cached"; lipo -info FEX/build-ios/FEXCore/Source/libFEXCore.a | head; exit 0; fi
-          bash scripts/build-fex-ios.sh
-      - name: Build GnuTLS stack if not cached
-        run: |
-          if [[ -f toolchains/gnutls-ios/lib/libgnutls.a ]]; then echo "GnuTLS cached"; exit 0; fi
-          bash build/gnutls-ios/build.sh 2>&1 | tee gnutls-build.log
-      - name: Configure Wine if not cached
-        run: |
-          if [[ -f wine/build-macos/include/config.h ]]; then echo "wine config cached"; exit 0; fi
-          brew list bison >/dev/null 2>&1 || brew install bison flex
-          export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:$PATH"
-          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:$PATH"
-          mkdir -p wine/build-macos
-          cd wine/build-macos
-          ../configure --enable-win64 --without-x --without-freetype --without-vulkan --disable-tests --prefix=/tmp/wine-ios > ../../wine-configure.log 2>&1 || { cat ../../wine-configure.log; exit 1; }
-      - name: Save completed dependency builds before compiling Wine
+          valid=true
+          for library in gmp nettle hogweed gnutls; do
+            python3 tools/validate-ios-bundle.py --archive "toolchains/gnutls-ios/lib/lib$library.a" || valid=false
+          done
+          [[ -f toolchains/gnutls-ios/include/gnutls/gnutls.h ]] || valid=false
+          if [[ "$valid" != true ]]; then
+            rm -f build/gnutls-ios/obj/{gmp,nettle,gnutls}.done
+            bash build/gnutls-ios/build.sh 2>&1 | tee gnutls-build.log
+          fi
+          for library in gmp nettle hogweed gnutls; do
+            python3 tools/validate-ios-bundle.py --archive "toolchains/gnutls-ios/lib/lib$library.a"
+            cp "toolchains/gnutls-ios/lib/lib$library.a" app/Madeira/
+          done
+      - name: Prepare Wine toolchain, headers and FreeType
+        run: bash scripts/prepare-wine-ios.sh 2>&1 | tee wine-prepare-build.log
+      - name: Save completed native dependencies
         if: steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
@@ -89,38 +113,47 @@ jobs:
             build/gnutls-ios/obj
             wine/build-macos
             toolchains/llvm-mingw-20260421-ucrt-macos-universal
-            toolchains/llvm-ios-build
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
-      - name: Generate Wine headers and build FreeType
-        run: |
-          make -C wine/build-macos -j3 include/all 2>&1 | tee wine-headers-build.log
-          git init research/freetype
-          git -C research/freetype fetch --depth 1 https://github.com/freetype/freetype.git 42608f77f20749dd6ddc9e0536788eaad70ea4b5
-          git -C research/freetype checkout --detach FETCH_HEAD
-          bash build/freetype-ios/build.sh 2>&1 | tee freetype-build.log
-      - name: Build Wine unix libs
+      - name: Build Wine unix libraries
         run: |
           bash build/wineserver/build.sh 2>&1 | tee wineserver-build.log
           bash build/ntdll-unix/build.sh 2>&1 | tee ntdll-build.log
           bash build/win32u-unix/build.sh 2>&1 | tee win32u-build.log
-          ls -lh app/Madeira/libwineserver.a app/Madeira/libntdll_unix.a app/Madeira/libwin32u_unix.a
-      - name: Build DXMT native library
-        run: |
-          # LLVM must be built for iOS; empty archives cannot satisfy this input.
-          python3 tools/validate-ios-bundle.py --archive toolchains/llvm-ios-build/lib/libLLVMCore.a
-          bash build/dxmt-ios/build.sh 2>&1 | tee dxmt-build.log
-          xcrun -sdk iphoneos libtool -static -o build/dxmt-ios/libdxmt_combined.a build/dxmt-ios/obj/*.o toolchains/llvm-ios-build/lib/*.a
-          cp build/dxmt-ios/libdxmt_combined.a app/Madeira/
-      - name: Fetch Microsoft runtime inputs
+      - name: Fetch and validate Microsoft runtime inputs
         run: bash tools/fetch-vcruntime.sh 2>&1 | tee vcruntime-build.log
         env:
           VCRUNTIME_URL: ${{ secrets.VCRUNTIME_URL }}
-      - name: Check required native archives
+      - name: Restore LLVM source and host/iOS builds
+        id: llvm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            toolchains/llvm-project
+            toolchains/llvm-host-build
+            toolchains/llvm-ios-build
+          key: ipa-llvm15-${{ runner.arch }}-xcode26.3-${{ hashFiles('build/dxmt-ios/build-llvm.sh') }}
+      - name: Build LLVM for iOS
+        run: bash build/dxmt-ios/build-llvm.sh 2>&1 | tee llvm-build.log
+      - name: Save LLVM before compiling DXMT
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            toolchains/llvm-project
+            toolchains/llvm-host-build
+            toolchains/llvm-ios-build
+          key: ${{ steps.llvm-cache.outputs.cache-primary-key }}
+      - name: Build DXMT native library and ARM64 PE modules
+        run: bash build/dxmt-ios/build-all.sh 2>&1 | tee dxmt-build.log
+      - name: Validate inputs before Xcode
         run: |
-          for lib in libwineserver.a libntdll_unix.a libwin32u_unix.a libdxmt_combined.a; do
-            python3 tools/validate-ios-bundle.py --archive "app/Madeira/$lib"
+          for library in wineserver ntdll_unix win32u_unix dxmt_combined gmp nettle hogweed gnutls; do
+            python3 tools/validate-ios-bundle.py --archive "app/Madeira/lib$library.a"
           done
-      - name: Xcode build (unsigned, no signing)
+          python3 tools/validate-ios-bundle.py --resources app/Madeira
+          bash tools/check-prefix-template.sh
+          python3 tools/check-build-inputs.py --output build-input-audit.json
+      - name: Xcode build (unsigned)
         run: |
           xcodebuild -project app/Madeira.xcodeproj -scheme Madeira -sdk iphoneos -configuration Release -derivedDataPath "$RUNNER_TEMP/madeira-derived" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tee xcode-build.log
       - name: Validate and package unsigned app
@@ -131,7 +164,7 @@ jobs:
           cp -R "$APP" "$RUNNER_TEMP/madeira-package/Payload/"
           (cd "$RUNNER_TEMP/madeira-package" && zip -qr "$GITHUB_WORKSPACE/Madeira-unsigned.ipa" Payload)
           python3 tools/validate-ios-bundle.py --ipa Madeira-unsigned.ipa
-          echo "Unsigned bundle validated. Signing and device JIT still require testing."
+          echo "Unsigned bundle validated. Signing and device execution remain untested."
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v5
         with:
@@ -146,10 +179,16 @@ jobs:
           name: ipa-build-logs
           path: |
             *-build.log
+            build-input-audit.json
             ${{ runner.temp }}/madeira-derived/Logs/Build/**
             build/**/obj/*.err
             build/**/obj/err-*.txt
             wine-configure.log
+            wine-headers-build.log
+            wine-dxmt-pe-build.log
+            freetype-build.log
             build/gnutls-ios/obj/*.log
+            toolchains/llvm-*/CMakeFiles/CMakeConfigureLog.yaml
+            build/dxmt-ios/pe/meson-logs/**
           if-no-files-found: warn
           retention-days: 7

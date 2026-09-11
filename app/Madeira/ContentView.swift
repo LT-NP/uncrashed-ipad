@@ -966,6 +966,8 @@ struct ContentView: View {
     /// happens in MetalBackedView); ALL controls live in the pillarbox
     /// bars left/right of the game — the window-level surface would cover
     /// anything drawn over the game area itself. No header/log/nav chrome.
+    /// Touch buttons/sticks are drawn by the window-level TouchControlsHost
+    /// overlay (landscape-only), not by this tree — see TouchControlsOverlay.
     private var landscapeBody: some View {
         GeometryReader { geo in
             let gameW = min(geo.size.width, geo.size.height * 4.0 / 3.0)
@@ -973,6 +975,14 @@ struct ContentView: View {
             ZStack {
                 Color.black
                 MadeiraMetalView()
+                    // iPad commonly launches straight into landscape; without
+                    // this the TouchControls overlay window never attaches and
+                    // the game runs with no input until a portrait visit.
+                    .onAppear { TouchControlsHost.attach() }
+                    .onReceive(NotificationCenter.default.publisher(
+                        for: UIDevice.orientationDidChangeNotification)) { _ in
+                        TouchControlsHost.attach()   // re-frame to the new bounds
+                    }
                 // Controls removed for now (ml586): game-only landscape.
                 // The FPS readout stays, pinned in the right pillarbox bar —
                 // the window-level surface covers anything drawn over the
@@ -1486,7 +1496,6 @@ struct ContentView: View {
                         return
                     }
                     // Prerequisite checks that are cheap and explain the first failure before Wine logs appear
-                    let vcruntime = ["msvcp140.dll","vcruntime140.dll","vcruntime140_1.dll"].map{ documents.appendingPathComponent("wine/drive_c/Program Files/Uncrashed FPV Drone Sim/Uncrashed/Binaries/Win64/\($0)") } // game-side
                     let bundledVCR = ["msvcp140.dll","vcruntime140.dll","vcruntime140_1.dll"].map{ Bundle.main.bundleURL.appendingPathComponent("x86_64-vcruntime/\($0)") }
                     let vcrMissing = bundledVCR.filter{ !fm.fileExists(atPath: $0.path) }
                     if !vcrMissing.isEmpty {
@@ -1495,14 +1504,32 @@ struct ContentView: View {
                     if let attrs = try? fm.attributesOfItem(atPath: exeURL.path), let sz = attrs[.size] as? UInt64 {
                         logStore.log(String(format:"Uncrashed exe: %@ (%.1f MB)", exeURL.lastPathComponent, Double(sz)/1024/1024))
                     }
-                    var args = "Uncrashed -dx11 -windowed -ResX=960 -ResY=540 -log"
+                    // 1024x768 matches the Wine monitor (driver_ios.c), the
+                    // MetalHost gameRect aspect, and the touch-input mapping —
+                    // a 16:9 Res would render letterboxed while touches map to
+                    // the full 4:3 surface, skewing input. Override freely via
+                    // Documents/uncrashed-args.txt once the first splash works.
+                    var args = "Uncrashed -dx11 -windowed -ResX=1024 -ResY=768 -log"
                     if let txt = try? String(contentsOf: documents.appendingPathComponent("uncrashed-args.txt"), encoding: .utf8) {
                         let value = txt.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !value.isEmpty { args = value; logStore.log("Using Documents/uncrashed-args.txt override") }
                     }
                     setenv("MADEIRA_EXE", "C:\\Program Files\\Uncrashed FPV Drone Sim\\Uncrashed\\Binaries\\Win64\\Uncrashed-Win64-Shipping.exe", 1)
                     setenv("MADEIRA_ARGS", args, 1)
+                    setenv("MADEIRA_SCREEN_W", "1024", 1)
+                    setenv("MADEIRA_SCREEN_H", "768", 1)
                     unsetenv("MADEIRA_DESKTOP")
+                    // Clear Steam-run experiment vars: env is process-global and
+                    // the Steam button arms IR capture / surface dumps / jitless
+                    // flags that must not leak into a direct-game launch.
+                    unsetenv("MADEIRA_IRCAP_RVA")
+                    unsetenv("MADEIRA_IRCAP_MODULE")
+                    unsetenv("MADEIRA_SURF_SEQ")
+                    unsetenv("MADEIRA_SRCWATCH")
+                    unsetenv("MADEIRA_SRCWATCH_ROWS")
+                    unsetenv("MADEIRA_DUMP_SURFACES")
+                    unsetenv("MADEIRA_JITLESS")
+                    unsetenv("MADEIRA_SOCK_WIRE")
                     logStore.log("Uncrashed: args = \(args)")
                     logStore.log("Tip: check LogStore + Unreal Saved/Logs after launch — first failure is usually Steam, d3d11.dll, or Jetsam (see UNCRASHED.md:50)", level: .success)
                     runWineFullSequence()
@@ -1526,6 +1553,7 @@ struct ContentView: View {
                 Button("x64 DX11 cube") {
                     setenv("MADEIRA_EXE", "cube-x64.exe", 1)
                     unsetenv("MADEIRA_ARGS")
+                    unsetenv("MADEIRA_DESKTOP")
                     runWineFullSequence()
                 }
                 .buttonStyle(.borderedProminent)

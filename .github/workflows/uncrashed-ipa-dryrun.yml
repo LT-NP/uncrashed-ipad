@@ -20,9 +20,10 @@ jobs:
         with:
           persist-credentials: false
           submodules: false
-      - name: Fetch all submodules shallow (for Xcode file refs)
-        run: git submodule update --init --recursive --depth 1
       - name: Ensure CI placeholders so Xcode has files to reference
+        # No submodule fetch: xcodebuild -list / -showBuildSettings only need
+        # the project file plus these placeholder inputs, not the GB-sized
+        # FEX/Wine/DXMT sources (real builds fetch them explicitly).
         run: bash tools/ensure-ci-placeholders.sh
       - name: Xcode list and build-settings dry-run
         run: |

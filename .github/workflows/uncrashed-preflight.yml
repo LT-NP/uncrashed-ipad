@@ -34,9 +34,14 @@ jobs:
         run: xcrun swiftc -frontend -parse app/Madeira/*.swift
       - name: Check Python and transfer script syntax
         run: |
-          python3 -m py_compile tools/check-build-inputs.py tools/audit-uncrashed.py
+          python3 -m py_compile tools/*.py
           bash -n scripts/deploy-uncrashed.sh
+          bash -n scripts/deploy-thumper.sh
           bash -n scripts/build-fex-ios.sh
+          bash -n scripts/prepare-wine-ios.sh
+          bash -n tools/check-prefix-template.sh
+          bash -n tools/ensure-ci-placeholders.sh
+          bash -n tools/fetch-vcruntime.sh
       - name: Inventory missing native build inputs
         # This check is expected to report "missing" before the native
         # libraries are built on the macOS runner. It produces an audit

@@ -1,11 +1,15 @@
 #!/bin/bash
 # Build a tiny x86_64 PE for testing FEX on iOS.
 # Usage: ./build.sh fib   (or any other .c file in this dir without extension)
-set -e
+set -euo pipefail
 
 NAME="${1:-fib}"
-TOOLCHAIN="/Users/willfaust/Documents/ios-pc-game-claude/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin"
-APP_BUNDLE="/Users/willfaust/Documents/ios-pc-game-claude/app/Madeira/arm64ec-windows"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+TOOLCHAIN="${TOOLCHAIN:-$REPO_ROOT/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin}"
+APP_BUNDLE="${APP_BUNDLE:-$REPO_ROOT/app/Madeira/arm64ec-windows}"
+
+[[ -x "$TOOLCHAIN/x86_64-w64-mingw32-clang" ]] || { echo "ERROR: mingw clang not found in $TOOLCHAIN" >&2; exit 1; }
+[[ -f "$NAME.c" ]] || { echo "ERROR: no such test source: $NAME.c" >&2; exit 1; }
 
 cd "$(dirname "$0")"
 
@@ -23,12 +27,16 @@ cp "$NAME.exe" "$APP_BUNDLE/$NAME.exe"
 ls -la "$APP_BUNDLE/$NAME.exe"
 
 echo ""
-echo "=== md5 ==="
-md5 "$NAME.exe" "$APP_BUNDLE/$NAME.exe"
+echo "=== checksum ==="
+if command -v md5 >/dev/null; then
+    md5 "$NAME.exe" "$APP_BUNDLE/$NAME.exe"
+elif command -v md5sum >/dev/null; then
+    md5sum "$NAME.exe" "$APP_BUNDLE/$NAME.exe"
+fi
 
 echo ""
 echo "=== entry/main symbols ==="
-"$TOOLCHAIN/../../llvm-mingw-20260421-ucrt-macos-universal/bin/x86_64-w64-mingw32-objdump" --syms "$NAME.exe" 2>&1 \
+"$TOOLCHAIN/x86_64-w64-mingw32-objdump" --syms "$NAME.exe" 2>&1 \
     | grep -E "_main|main$|mainCRTStartup|WinMainCRTStartup" | head -5
 
 echo ""

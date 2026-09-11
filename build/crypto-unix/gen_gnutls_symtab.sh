@@ -10,13 +10,20 @@
 #
 # Entries reference symbols via __asm__ aliases, so no gnutls headers
 # (and no prototype conflicts) are needed here at all.
-set -e
+set -euo pipefail
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
 WINE_SRC="$REPO_ROOT/wine"
 GNUTLS_LIB="$REPO_ROOT/toolchains/gnutls-ios/lib/libgnutls.a"
 OUT="$BUILD_DIR/gnutls_symtab_ios.c"
+
+for src in "$WINE_SRC/dlls/bcrypt/gnutls.c" \
+    "$WINE_SRC/dlls/secur32/schannel_gnutls.c" \
+    "$WINE_SRC/dlls/crypt32/unixlib.c"; do
+    [[ -f "$src" ]] || { echo "ERROR: Wine source missing: $src (init the wine submodule)" >&2; exit 1; }
+done
+[[ -f "$GNUTLS_LIB" ]] || { echo "ERROR: $GNUTLS_LIB missing (build gnutls-ios first)" >&2; exit 1; }
 
 SOURCES=(
     "$WINE_SRC/dlls/bcrypt/gnutls.c"
@@ -34,7 +41,19 @@ wanted=$( {
 } | grep -v '^f$' | sort -u )   # '^f$' = the LOAD_FUNCPTR(f) macro definition itself
 
 # 2. Names libgnutls.a defines (defined symbols only, strip leading _)
-available=$(nm -gU "$GNUTLS_LIB" 2>/dev/null | awk '{print $3}' | sed 's/^_//' | sort -u)
+if [[ "$(uname -s)" == Darwin ]]; then
+    available=$(nm -gU "$GNUTLS_LIB" 2>/dev/null | awk '{print $3}' | sed 's/^_//' | sort -u)
+else
+    available=$(nm -g --defined-only "$GNUTLS_LIB" 2>/dev/null | awk '{print $3}' | sed 's/^_//' | sort -u)
+fi
+if [[ -z "${wanted//[[:space:]]/}" ]]; then
+    echo "ERROR: no Wanted GnuTLS symbols found in Wine sources" >&2
+    exit 1
+fi
+if [[ -z "${available//[[:space:]]/}" ]]; then
+    echo "ERROR: no defined symbols in $GNUTLS_LIB (build gnutls-ios first)" >&2
+    exit 1
+fi
 
 present=$(comm -12 <(echo "$wanted") <(echo "$available"))
 missing=$(comm -23 <(echo "$wanted") <(echo "$available"))
@@ -88,6 +107,10 @@ EOF
 
 count=$(echo "$present" | grep -c . || true)
 echo "generated $OUT with $count symbols"
+if [[ "$count" -eq 0 ]]; then
+    echo "ERROR: empty GnuTLS symbol table (wanted ${wanted:+non-}empty, lib parsed but no overlap)" >&2
+    exit 1
+fi
 if [ -n "$missing" ]; then
     echo "NOT in libgnutls.a (OPT symbols get NULL; required ones will fail loudly at unixlib init):"
     echo "$missing" | sed 's/^/  /'
