@@ -1,4 +1,4 @@
-name: Build DXMT iOS (scaffolding)
+name: Build DXMT iOS
 
 on:
   workflow_dispatch:
@@ -7,209 +7,106 @@ on:
     paths:
       - ".github/workflows/uncrashed-dxmt.yml"
       - "build/dxmt-ios/**"
+      - "build/freetype-ios/**"
+      - "scripts/prepare-wine-ios.sh"
+      - "tools/validate-ios-bundle.py"
       - "research/dxmt/**"
+      - "wine/**"
 
 permissions:
   contents: read
 
-jobs:
-  dxmt-check:
-    runs-on: macos-15
-    timeout-minutes: 15
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-          submodules: false
-      - name: Fetch DXMT submodule
-        run: |
-          git submodule update --init --recursive --depth 1 research/dxmt
-          test -f research/dxmt/src/dxmt/dxmt_device.cpp -o -f research/dxmt/src/winemetal/unix/winemetal_unix.c || { echo "dxmt sources missing"; ls research/dxmt/src | head; exit 1; }
-          test -f research/dxmt/external/nvapi/nvapi.h -o -f research/dxmt/include/native/directx/d3d11.h || { echo "DXMT nested submodules missing"; git -C research/dxmt submodule status --recursive | head; exit 1; }
-          git -C research/dxmt log --oneline -3
-      - name: Validate DXMT iOS build scripts without LLVM
-        run: |
-          bash -n build/dxmt-ios/build.sh
-          cat build/dxmt-ios/README.md | head -n 40
-          echo "--- toolchains check ---"
-          ls -ld toolchains/ 2>&1 | head
-          if [[ -d toolchains/llvm-ios-build ]]; then
-            echo "llvm-ios-build present"
-            ls toolchains/llvm-ios-build/lib/*.a 2>&1 | head
-          else
-            echo "::notice::toolchains/llvm-ios-build not present — 2-stage LLVM 15 build (~2hr) required for libdxmt_combined.a. See build/dxmt-ios/README.md:43"
-          fi
-          if [[ -d toolchains/llvm-mingw-20260421-ucrt-macos-universal ]]; then
-            echo "llvm-mingw present"
-          else
-            echo "::notice::llvm-mingw not present — download 180MB tar.xz via README step 2 (cached on GH via actions/cache)."
-          fi
-          bash tools/ensure-ci-placeholders.sh
-          python3 tools/check-build-inputs.py --output /tmp/dxmt-audit.json || true
-          cat /tmp/dxmt-audit.json | python3 -m json.tool | head -n 40
+concurrency:
+  group: uncrashed-dxmt-${{ github.ref }}
+  cancel-in-progress: false
 
-  dxmt-dryrun:
-    needs: dxmt-check
-    runs-on: macos-15
-    timeout-minutes: 10
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+jobs:
+  source-check:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-          fetch-depth: 1
-          submodules: false
-      - name: Fetch DXMT + wine headers + llvm-mingw
+      - name: Check build scripts and validators
+        shell: bash
         run: |
-          git submodule update --init --recursive --depth 1 research/dxmt
-          git submodule update --init --depth 1 wine
-          # DXMT's nested submodules (external/nvapi, include/native/directx) are required for meson
-          git -C research/dxmt submodule status --recursive | head -n 20
-          # wine/build-macos needed for -Dwine_build_path
-          if [[ ! -f wine/build-macos/include/config.h ]]; then echo "::warning::wine/build-macos not cached — dry-run may fail, run wine-unix-build first"; fi
-          ls -ld toolchains/llvm-mingw-20260421-ucrt-macos-universal 2>&1 | head || echo "llvm-mingw not cached — will download"
-      - name: Cache llvm-mingw
-        uses: actions/cache@v4
-        with:
-          path: toolchains/llvm-mingw-20260421-ucrt-macos-universal
-          key: llvm-mingw-20260421-${{ runner.arch }}-xcode26.3
-      - name: Fetch llvm-mingw if missing
-        run: |
-          if [[ -d toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin ]]; then echo "llvm-mingw cached"; exit 0; fi
-          mkdir -p toolchains
-          curl --fail --silent --show-error --location --retry 3 --connect-timeout 30 --max-time 600 --proto '=https' --proto-redir '=https' https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/llvm-mingw-20260421-ucrt-macos-universal.tar.xz | tar -xJ -C toolchains/
-          ls toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin | head -n 20
-      - name: Meson setup dry-run (no compile, ~2min)
-        run: |
-          brew list meson >/dev/null 2>&1 || brew install meson ninja 2>&1 | tail -n 10
-          brew list llvm >/dev/null 2>&1 || true
-          ln -sf "$PWD/toolchains" research/dxmt/toolchains 2>/dev/null || true
-          ls -l research/dxmt/toolchains 2>&1 | head
-          # winecrt0 + winebuild placeholder for dry-run: DXMT meson requires
-          # wine/build-macos/dlls/winecrt0/aarch64-windows/libwinecrt0.a and
-          # wine/build-macos/tools/winebuild/winebuild (windows_builtin_install_dir = aarch64-windows)
-          # The full Wine PE build (make dlls/winecrt0) is ~5min and not needed for dry-run validation.
-          for dir in "dlls/winecrt0/aarch64-windows" "libs/winecrt0/aarch64-windows" "dlls/ntdll/aarch64-windows" "dlls/dbghelp/aarch64-windows" "dlls/ntdll" "dlls/winecrt0"; do
-            if [[ ! -f "wine/build-macos/$dir/libwinecrt0.a" && "$dir" == *winecrt0* ]]; then
-              mkdir -p "wine/build-macos/$dir"
-              printf '!<arch>\n' > "wine/build-macos/$dir/libwinecrt0.a"
-              echo "Created dummy wine/build-macos/$dir/libwinecrt0.a"
-            fi
-            if [[ "$dir" == *ntdll* && ! -f "wine/build-macos/$dir/libntdll.a" ]]; then
-              mkdir -p "wine/build-macos/$dir"
-              printf '!<arch>\n' > "wine/build-macos/$dir/libntdll.a" 2>/dev/null || true
-            fi
-            if [[ "$dir" == *dbghelp* && ! -f "wine/build-macos/$dir/libdbghelp.a" ]]; then
-              mkdir -p "wine/build-macos/$dir"
-              printf '!<arch>\n' > "wine/build-macos/$dir/libdbghelp.a" 2>/dev/null || true
-            fi
+          for script in build/dxmt-ios/*.sh build/freetype-ios/build.sh scripts/prepare-wine-ios.sh; do
+            bash -n "$script"
           done
-          mkdir -p wine/build-macos/dlls/winecrt0 && printf '!<arch>\n' > wine/build-macos/dlls/winecrt0/libwinecrt0.a 2>/dev/null || true
-          # winebuild tool is required for meson — create dummy for dry-run (real build is 'make -C wine/build-macos tools/winebuild/winebuild' ~30s)
-          if [[ ! -x wine/build-macos/tools/winebuild/winebuild ]]; then
-            echo "Creating dummy winebuild for dry-run..."
-            mkdir -p wine/build-macos/tools/winebuild
-            printf '#!/bin/sh\nexit 0\n' > wine/build-macos/tools/winebuild/winebuild
-            chmod +x wine/build-macos/tools/winebuild/winebuild
-          fi
-          ls -lh wine/build-macos/dlls/winecrt0/aarch64-windows/libwinecrt0.a wine/build-macos/tools/winebuild/winebuild 2>&1 | head
-          # Validate cross file and that wine headers are findable — this is the 90% failure surface
-          cat research/dxmt/build-aarch64-win.txt | head -n 30
-          echo "--- meson setup dry-run ---"
-          # Use --reconfigure if build-pe exists, otherwise setup
-          rm -rf /tmp/dxmt-dryrun && mkdir -p /tmp/dxmt-dryrun
-          # We run meson setup but abort before compile — setup itself validates toolchain + wine_build_path
-          # If it succeeds, the 2hr compile is at least startable.
-          # Correct order: meson setup <build_dir> <source_dir> with cross files
-          SDKROOT=$(xcrun --sdk macosx --show-sdk-path) PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/bin:$PATH" \
-            meson setup --cross-file research/dxmt/build-aarch64-win.txt --native-file research/dxmt/build-osx.txt -Dwine_build_path="$PWD/wine/build-macos" /tmp/dxmt-dryrun research/dxmt 2>&1 | tee /tmp/meson-setup.log | head -n 100
-          echo "Meson setup dry-run exit: $?"
-          cat /tmp/meson-setup.log | tail -n 50
-          if grep -q "Build targets in project:" /tmp/meson-setup.log; then echo "::notice::Meson setup dry-run succeeded — toolchain + wine_build_path OK, 2hr compile is startable"; else echo "::warning::Meson setup did not complete — check log"; exit 1; fi
+          python3 -m unittest discover -s tools -p 'test_*.py'
 
   dxmt-build:
     if: github.event_name == 'workflow_dispatch'
-    needs: dxmt-dryrun
+    needs: source-check
     runs-on: macos-15
-    timeout-minutes: 150
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      JOBS: 3
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
           fetch-depth: 1
           submodules: false
-      - name: Fetch DXMT + wine
+      - name: Verify Xcode and install build tools
         run: |
-          git submodule update --init --recursive --depth 1 research/dxmt wine
-          git -C research/dxmt submodule status --recursive | head -n 20
-      - name: Cache llvm-mingw
-        uses: actions/cache@v4
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          brew install llvm bison flex cmake ninja meson
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+      - name: Fetch pinned DXMT and Wine sources
+        run: git submodule update --init --recursive --depth 1 research/dxmt wine
+      - name: Restore LLVM source and host/iOS builds
+        id: llvm-cache
+        uses: actions/cache/restore@v4
         with:
-          path: toolchains/llvm-mingw-20260421-ucrt-macos-universal
-          key: llvm-mingw-20260421-${{ runner.arch }}-xcode26.3
-      - name: Fetch llvm-mingw
-        run: |
-          if [[ -d toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin ]]; then echo "llvm-mingw cached"; exit 0; fi
-          mkdir -p toolchains
-          curl --fail --silent --show-error --location --retry 3 --connect-timeout 30 --max-time 600 --proto '=https' --proto-redir '=https' https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/llvm-mingw-20260421-ucrt-macos-universal.tar.xz | tar -xJ -C toolchains/
-      - name: Cache llvm-ios-build (2hr)
-        uses: actions/cache@v4
+          path: |
+            toolchains/llvm-project
+            toolchains/llvm-host-build
+            toolchains/llvm-ios-build
+          key: ipa-llvm15-${{ runner.arch }}-xcode26.3-${{ hashFiles('build/dxmt-ios/build-llvm.sh') }}
+      - name: Build and validate LLVM for iOS
+        run: bash build/dxmt-ios/build-llvm.sh 2>&1 | tee llvm-build.log
+      - name: Save completed LLVM build
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
         with:
-          path: toolchains/llvm-ios-build
-          key: llvm-ios-15-${{ hashFiles('build/dxmt-ios/build.sh', 'build/dxmt-ios/README.md') }}-v1
-          restore-keys: |
-            llvm-ios-15-
-      - name: Build LLVM 15 for iOS if not cached (2-stage, ~90min)
-        run: |
-          if [[ -f toolchains/llvm-ios-build/lib/libLLVMCore.a ]]; then echo "llvm-ios-build cached — skipping"; ls toolchains/llvm-ios-build/lib/*.a | head; exit 0; fi
-          echo "Building LLVM 15 for iOS — see build/dxmt-ios/README.md:43"
-          # Host stage + iOS stage — uses AddLLVM.cmake patch for Darwin|iOS
-          # This is the long step; logs truncated to avoid 50MB artifact
-          bash -c 'set -x; ls toolchains/llvm-project/llvm/CMakeLists.txt 2>&1 | head || echo "llvm-project not in repo — cloning minimal"'
-          # If llvm-project not present, we cannot build — warn and create placeholder so DXMT unix still builds
-          if [[ ! -d toolchains/llvm-project ]]; then
-            echo "::warning::toolchains/llvm-project not present — skipping LLVM build, DXMT unix will use dummy LLVM libs"
-            mkdir -p toolchains/llvm-ios-build/lib toolchains/llvm-ios-build/include
-            printf '!<arch>\n' > toolchains/llvm-ios-build/lib/libLLVMCore.a
-          else
-            # Real build would go here — placeholder for now to avoid 2hr on every dispatch
-            echo "LLVM source present — would run 2-stage build here"
-          fi
-      - name: Build DXMT PE + unix
-        run: |
-          ln -sf "$PWD/toolchains" research/dxmt/toolchains 2>/dev/null || true
-          # Ensure Wine PE libs exist (from wine-unix-build cache)
-          if [[ ! -f wine/build-macos/include/config.h ]]; then echo "::warning::wine/build-macos not ready — DXMT PE may fail"; fi
-          # PE side
-          SDKROOT=$(xcrun --sdk macosx --show-sdk-path) PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/bin:$PATH" \
-            meson setup --cross-file research/dxmt/build-aarch64-win.txt --native-file research/dxmt/build-osx.txt -Dwine_build_path="$PWD/wine/build-macos" /tmp/dxmt-build research/dxmt 2>&1 | tee meson-full.log | tail -n 50
-          SDKROOT=$(xcrun --sdk macosx --show-sdk-path) PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/bin:$PATH" \
-            meson compile -C /tmp/dxmt-build 2>&1 | tail -n 100 || echo "::warning::DXMT PE compile failed — continuing to unix"
-          # Unix side (needs LLVM headers if present, else dummy)
-          bash build/dxmt-ios/build.sh 2>&1 | tee dxmt-unix.log || echo "::warning::DXMT unix build failed — see dxmt-unix.log"
-          ls -lh build/dxmt-ios/obj/*.o 2>&1 | head || true
-          # Combine
-          if [[ -d toolchains/llvm-ios-build/lib && -f toolchains/llvm-ios-build/lib/libLLVMCore.a ]]; then
-            xcrun -sdk iphoneos libtool -static -o build/dxmt-ios/libdxmt_combined.a build/dxmt-ios/obj/*.o toolchains/llvm-ios-build/lib/*.a 2>&1 | tail -n 20 || echo "libtool combine failed"
-          else
-            xcrun -sdk iphoneos libtool -static -o build/dxmt-ios/libdxmt_combined.a build/dxmt-ios/obj/*.o 2>&1 | tail -n 20 || true
-          fi
-          cp build/dxmt-ios/libdxmt_combined.a app/Madeira/ 2>/dev/null || cp build/dxmt-ios/libdxmt_unix.a app/Madeira/libdxmt_combined.a 2>/dev/null || true
-          ls -lh app/Madeira/libdxmt_combined.a
-      - name: Upload DXMT libs
+          path: |
+            toolchains/llvm-project
+            toolchains/llvm-host-build
+            toolchains/llvm-ios-build
+          key: ${{ steps.llvm-cache.outputs.cache-primary-key }}
+      - name: Build Wine inputs, DXMT PE modules and native library
+        run: bash build/dxmt-ios/build-all.sh 2>&1 | tee dxmt-build.log
+      - name: Upload validated DXMT outputs
         uses: actions/upload-artifact@v5
         with:
           name: dxmt-ios
           path: |
             app/Madeira/libdxmt_combined.a
-            app/Madeira/aarch64-windows/*.dll
-            dxmt-unix.log
-            meson-full.log
+            app/Madeira/aarch64-windows/d3d11.dll
+            app/Madeira/aarch64-windows/dxgi.dll
+            app/Madeira/aarch64-windows/winemetal.dll
+            app/Madeira/aarch64-windows/d3d10core.dll
+          if-no-files-found: error
+          retention-days: 7
+      - name: Save build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: dxmt-build-logs
+          path: |
+            *-build.log
+            wine-configure.log
+            build/dxmt-ios/obj/*.log
+            build/dxmt-ios/pe/meson-logs/**
+            toolchains/llvm-*/CMakeFiles/CMakeConfigureLog.yaml
           if-no-files-found: warn
           retention-days: 7

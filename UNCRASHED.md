@@ -12,6 +12,22 @@ and FEX -> DXMT (D3D11 to Metal) -> iOS. This reuses an existing runtime instead
 of implementing Wine/Box64/DXVK/MoltenVK integration. Upstream reports other
 games playable, which is not evidence that Uncrashed works.
 
+## Latest local continuation — September 11, 2026
+
+The standalone `uncrashed-dxmt.yml` workflow now uses the same real LLVM,
+Wine preparation, PE DLL and native DXMT build scripts as the IPA workflow.
+It no longer creates placeholder libraries or suppresses compiler failures.
+Pushes run script and validator checks; a manual dispatch builds the graphics
+runtime on macOS, uploads only the four DXMT DLLs and combined native archive
+on success, and preserves diagnostics on failure. Completed LLVM builds share
+an exact cache key with the IPA workflow.
+
+Local validation: all 49 Python tests pass. Native compilation, IPA packaging,
+installation and gameplay still require validation. The historical CI results
+below predate these changes and do not establish a working build. The next
+step is a macOS run of `Build DXMT iOS`, resolving its first concrete failure,
+then the complete `Build IPA (hosted, unsigned)` workflow.
+
 ## Changes
 
 - `app/Madeira/ContentView.swift`: Uncrashed launch button, missing-file check,

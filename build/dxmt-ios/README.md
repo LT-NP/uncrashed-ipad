@@ -8,6 +8,21 @@ The upstream DXMT source lives at `research/dxmt/` as a git submodule
 pointing at our fork [willfaust/dxmt](https://github.com/willfaust/dxmt),
 `ios-port` branch. The iOS patches are committed there, not here.
 
+## Automated build
+
+Run `bash build/dxmt-ios/build-all.sh` from a checkout on an Apple Silicon
+Mac with Xcode and the build tools installed. It prepares real Wine inputs,
+builds pinned LLVM 15.0.7 for host/iOS, builds and validates the four PE DLLs,
+and builds and validates the combined iOS archive. These scripts automate the
+manual steps below; LLVM dead stripping is disabled through CMake rather than
+editing its sources.
+
+The `Build DXMT iOS` GitHub workflow runs local source checks on pushes and
+performs this full build on manual dispatch. It shares LLVM caches with the
+IPA workflow and saves full diagnostics on failure. No placeholder archives
+are accepted as completed outputs. The workflow changes still need a macOS run;
+a source-check success does not establish a working graphics runtime.
+
 ## What this produces
 
 - `libdxmt_combined.a` (~79MB) → `app/Madeira/libdxmt_combined.a`.
