@@ -157,10 +157,53 @@ def write_report(output, report):
     return 0
 
 
+def build_manifest(root, files, hash_limit_mb=64, hash_all=False):
+    """Per-file manifest for POST_BUILD_ROADMAP §5 transfer verification.
+
+    Records relative path + size for every file; sha256 only for files at or
+    under the hash limit (or all with hash_all), streamed in chunks so
+    multi-GB paks never sit fully in memory. Large paks verify by size;
+    small files (DLLs, configs, the shipping exe) verify by hash. Returns a
+    JSON-serializable dict; entries sorted for stable output.
+    """
+    limit = hash_limit_mb * 1024 * 1024
+    entries = []
+    total = 0
+    for p in sorted(files, key=lambda q: q.as_posix()):
+        try:
+            rel = p.relative_to(root).as_posix()
+        except (ValueError, OSError):
+            continue
+        try:
+            size = p.stat().st_size
+        except OSError:
+            continue
+        total += size
+        digest = None
+        if hash_all or size <= limit:
+            try:
+                h = hashlib.sha256()
+                with p.open('rb') as stream:
+                    for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
+                        h.update(chunk)
+                digest = h.hexdigest()
+            except OSError:
+                digest = None
+        entries.append(dict(path=rel, size=size, sha256=digest))
+    return dict(version=1, hash_limit_mb=hash_limit_mb, hash_all=hash_all,
+                files=entries, total_files=len(entries), total_bytes=total)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path(r'C:\Program Files (x86)\Steam\steamapps\common\Uncrashed FPV Drone Sim'))
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--manifest', type=Path, default=None,
+                        help='Also write a per-file transfer manifest for tools/verify-uncrashed-transfer.py')
+    parser.add_argument('--hash-all', action='store_true',
+                        help='Hash every file for the manifest (slow on ~20 GB trees)')
+    parser.add_argument('--hash-limit-mb', type=int, default=64,
+                        help='Hash manifest files at or under this size (default 64)')
     args = parser.parse_args()
     exe = args.root / 'Uncrashed/Binaries/Win64/Uncrashed-Win64-Shipping.exe'
     try:
@@ -174,6 +217,17 @@ def main():
     else:
         files = collect_game_files(args.root)
         summarize_game(args.root, report, files)
+    if args.manifest is not None:
+        manifest = build_manifest(args.root, files, args.hash_limit_mb, args.hash_all)
+        try:
+            args.manifest.parent.mkdir(parents=True, exist_ok=True)
+            args.manifest.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+        except OSError as e:
+            print(f"Failed to write manifest {args.manifest}: {e}", file=sys.stderr)
+            return 1
+        hashed = sum(1 for f in manifest['files'] if f['sha256'])
+        print(f"Manifest: {manifest['total_files']} files, "
+              f"{manifest['total_bytes']} bytes, {hashed} hashed")
     return write_report(args.output, report)
 
 

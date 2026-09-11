@@ -75,3 +75,7 @@ Uncrashed compatibility has not been demonstrated.
 Refresh the sideloaded apps before their signatures expire. A free account's
 three active app slots accommodate SideStore, StikDebug and Madeira. See the
 [SideStore FAQ](https://docs.sidestore.io/docs/faq) for refresh behavior and limits.
+
+The repeatable session workflow (JIT order, cube-first rule, log rotation,
+controller diagnostics, transfer verification) is kept as a checklist in
+[DEVICE_CHECKLIST](DEVICE_CHECKLIST.md).

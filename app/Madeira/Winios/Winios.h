@@ -60,6 +60,34 @@ void winios_pointer(int x, int y, unsigned int flags, unsigned int data);
  * by winios_pointer(MOVE); exposed for initial placement. */
 void winios_cursor_move(int x, int y);
 
+/* POST_BUILD_ROADMAP §7 — virtual gamepad state store.
+ *
+ * The app-side (Swift GamepadBridge) writes the merged physical +
+ * touchscreen pad state here with XInput-native ranges: sticks SHORT
+ * (-32768…32767, Y up-positive), triggers BYTE (0…255), buttons
+ * XINPUT_GAMEPAD_* bits, connected 0/1.
+ *
+ * No Wine consumer reads this yet. The Wine-side XInput/SDL/HID hook is
+ * deliberately deferred until the first Uncrashed launch (§6) shows which
+ * input API the game actually uses — wiring the wrong one now would be
+ * untestable guessing. That hook will poll winios_pad_get_state (returns
+ * 1 when a state has ever been written, 0 before the first update) from
+ * the Wine thread; all functions are thread-safe. State is also echoed
+ * to stderr (throttled) so device logs show what the game should have seen.
+ */
+void winios_pad_update(int lx, int ly, int rx, int ry,
+                       unsigned char lt, unsigned char rt,
+                       unsigned short buttons, int connected);
+int winios_pad_get_state(int *lx, int *ly, int *rx, int *ry,
+                         unsigned char *lt, unsigned char *rt,
+                         unsigned short *buttons, int *connected);
+
+/* POST_BUILD_ROADMAP §7 step 7 / §8 — stale-input release. Call on app
+ * interruption (willResignActive): key-ups for every held VK, mouse-button
+ * ups at the last absolute position, virtual pad zeroed (connected kept).
+ * Best-effort through the normal input queue; safe to call any time. */
+void winios_release_all_inputs(void);
+
 #ifdef __cplusplus
 }
 #endif

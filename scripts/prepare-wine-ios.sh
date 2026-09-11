@@ -47,14 +47,33 @@ aarch64-w64-mingw32-clang --version
 mkdir -p "$WINE_BUILD"
 (
     cd "$WINE_BUILD"
-    # Wine's build tools execute on macOS. Selecting clang with xcrun alone
-    # does not pass the macOS SDK to subsequent compiler invocations.
-    SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-    export SDKROOT
+    # Wine's build tools execute on macOS, but the compiler is invoked by its
+    # absolute Xcode path, which carries no default sysroot: without an
+    # explicit -isysroot even <stdio.h> is missing (CI: tools/widl failed
+    # after configure itself passed — its probe program needs no headers).
+    # A bare exported SDKROOT does not fix it, and subshell exports would not
+    # reach the make steps below this block anyway. So resolve the SDK once,
+    # verify it up front (seconds, not minutes), and bake -isysroot into the
+    # flags configure records in its Makefiles — configure tests and make
+    # then compile and link against the same SDK.
+    MACOS_SDK="$(xcrun --sdk macosx --show-sdk-path)"
+    if [[ -z "$MACOS_SDK" || ! -d "$MACOS_SDK" ]]; then
+        echo "ERROR: macOS SDK not found (xcrun returned '${MACOS_SDK:-<empty>}')." >&2
+        exit 1
+    fi
+    if [[ ! -f "$MACOS_SDK/usr/include/stdio.h" ]]; then
+        echo "ERROR: macOS SDK has no usr/include/stdio.h: $MACOS_SDK" >&2
+        exit 1
+    fi
+    echo "macOS SDK: $MACOS_SDK ($(xcrun --sdk macosx --show-sdk-version))"
+    SYSROOT_FLAGS="-isysroot $MACOS_SDK"
     # Preserve configure's actual compiler/linker diagnostic on failure.
     trap 'status=$?; if [[ $status -ne 0 && -f config.log ]]; then cat config.log >&2; fi; exit "$status"' EXIT
     CC="$(xcrun --sdk macosx --find clang)" \
     CXX="$(xcrun --sdk macosx --find clang++)" \
+    CFLAGS="${CFLAGS:-} $SYSROOT_FLAGS" \
+    CPPFLAGS="${CPPFLAGS:-} $SYSROOT_FLAGS" \
+    LDFLAGS="${LDFLAGS:-} $SYSROOT_FLAGS" \
     ../configure --enable-win64 --enable-archs=aarch64 --with-mingw=llvm-mingw \
         --without-x --without-freetype --without-vulkan --disable-tests \
         --prefix=/tmp/wine-ios

@@ -495,8 +495,15 @@ static void winios_q_push_ev(unsigned int type, int x, int y, unsigned int flags
  * Coordinates are in iOS view-local pixels; we scale to a fixed
  * 1024×768 logical surface inside winios_pProcessEvents to match
  * what DXMT swapchains use. */
+
+/* §7 step 7: held-key set + last absolute position, consumed by
+ * winios_release_all_inputs() (defined after the pad store, below). */
+static unsigned char g_held_vk[256];
+static int g_last_abs_x = 512, g_last_abs_y = 384;   /* 1024×768 centre */
+
 void winios_post_touch_down(int x, int y) {
     fprintf(stderr, "[winios] post_touch_down x=%d y=%d\n", x, y); fflush(stderr);
+    g_last_abs_x = x; g_last_abs_y = y;
     winios_q_push_ev(WINIOS_EV_MOUSE, x, y, MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE, 0);
 }
 
@@ -505,11 +512,13 @@ void winios_post_touch_move(int x, int y) {
     if ((cnt++ % 30) == 0) {
         fprintf(stderr, "[winios] post_touch_move x=%d y=%d (n=%u)\n", x, y, cnt); fflush(stderr);
     }
+    g_last_abs_x = x; g_last_abs_y = y;
     winios_q_push_ev(WINIOS_EV_MOUSE, x, y, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, 0);
 }
 
 void winios_post_touch_up(int x, int y) {
     fprintf(stderr, "[winios] post_touch_up x=%d y=%d\n", x, y); fflush(stderr);
+    g_last_abs_x = x; g_last_abs_y = y;
     winios_q_push_ev(WINIOS_EV_MOUSE, x, y, MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE, 0);
 }
 
@@ -517,7 +526,98 @@ void winios_post_touch_up(int x, int y) {
  * 0 for release. Queued like mouse events; drained in pProcessEvents. */
 void winios_post_key(int vk, int down) {
     fprintf(stderr, "[winios] post_key vk=0x%x down=%d\n", vk, down); fflush(stderr);
+    if (vk >= 0 && vk < 256) g_held_vk[vk] = down ? 1 : 0;   /* release-all set, below */
     winios_q_push_ev(WINIOS_EV_KEY, vk, 0, down ? 0 : KEYEVENTF_KEYUP, 0);
+}
+
+/* POST_BUILD_ROADMAP §7 — virtual gamepad state store.
+ *
+ * Written by Swift GamepadBridge (merged physical + touchscreen state),
+ * read later by the Wine-side input hook (see Winios.h: deliberately no
+ * consumer yet — §6 runtime evidence picks XInput vs SDL vs HID first).
+ * Plain mutex-guarded snapshot: the Wine thread polls the getter, so no
+ * ring buffer or event drain is needed for proportional axes. */
+static struct {
+    int lx, ly, rx, ry;
+    unsigned char lt, rt;
+    unsigned short buttons;
+    int connected;
+    int written;
+    pthread_mutex_t lock;
+} g_pad = { .lock = PTHREAD_MUTEX_INITIALIZER };
+
+void winios_pad_update(int lx, int ly, int rx, int ry,
+                       unsigned char lt, unsigned char rt,
+                       unsigned short buttons, int connected) {
+    int changed;
+    pthread_mutex_lock(&g_pad.lock);
+    changed = (g_pad.buttons != buttons) || (g_pad.connected != connected) || !g_pad.written;
+    g_pad.lx = lx; g_pad.ly = ly; g_pad.rx = rx; g_pad.ry = ry;
+    g_pad.lt = lt; g_pad.rt = rt;
+    g_pad.buttons = buttons; g_pad.connected = connected;
+    g_pad.written = 1;
+    pthread_mutex_unlock(&g_pad.lock);
+    /* Buttons/connectivity on change; axes sampled 1-in-256 so a held
+     * deflection doesn't flood the log but flight is still reconstructible. */
+    static unsigned cnt;
+    unsigned n = __sync_add_and_fetch(&cnt, 1);
+    if (changed || (n & 0xff) == 0) {
+        fprintf(stderr, "[winios-pad] #%u lx=%d ly=%d rx=%d ry=%d lt=%u rt=%u buttons=0x%04x connected=%d\n",
+                n, lx, ly, rx, ry, lt, rt, buttons, connected);
+        fflush(stderr);
+    }
+}
+
+int winios_pad_get_state(int *lx, int *ly, int *rx, int *ry,
+                         unsigned char *lt, unsigned char *rt,
+                         unsigned short *buttons, int *connected) {
+    int written;
+    pthread_mutex_lock(&g_pad.lock);
+    written = g_pad.written;
+    if (lx) *lx = g_pad.lx;
+    if (ly) *ly = g_pad.ly;
+    if (rx) *rx = g_pad.rx;
+    if (ry) *ry = g_pad.ry;
+    if (lt) *lt = g_pad.lt;
+    if (rt) *rt = g_pad.rt;
+    if (buttons) *buttons = g_pad.buttons;
+    if (connected) *connected = g_pad.connected;
+    pthread_mutex_unlock(&g_pad.lock);
+    return written;
+}
+
+/* POST_BUILD_ROADMAP §7 step 7 / §8 — stale-input release.
+ *
+ * An interruption (call, Control Center, backgrounding) cancels in-flight
+ * touches WITHOUT delivering touch-up/drag-end, so Wine would keep the last
+ * held keys/buttons forever — a stuck throttle or yaw on return. The Swift
+ * side calls winios_release_all_inputs() on willResignActive: every VK in
+ * the held set (maintained by winios_post_key above) gets a key-up through
+ * the same queue, mouse buttons get ups at the last known absolute position
+ * (never 0,0 — that would fling the cursor to the corner), and the virtual
+ * pad zeroes while keeping its connected flag. Unmatched ups are harmless
+ * in Wine; a stuck held key is not. */
+void winios_release_all_inputs(void) {
+    int released = 0;
+    for (int vk = 0; vk < 256; vk++) {
+        if (!g_held_vk[vk]) continue;
+        g_held_vk[vk] = 0;
+        winios_q_push_ev(WINIOS_EV_KEY, vk, 0, KEYEVENTF_KEYUP, 0);
+        released++;
+    }
+    winios_q_push_ev(WINIOS_EV_MOUSE, g_last_abs_x, g_last_abs_y,
+                     MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE, 0);
+    winios_q_push_ev(WINIOS_EV_MOUSE, g_last_abs_x, g_last_abs_y,
+                     MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_ABSOLUTE, 0);
+    pthread_mutex_lock(&g_pad.lock);
+    int was = g_pad.written, conn = g_pad.connected;
+    g_pad.lx = g_pad.ly = g_pad.rx = g_pad.ry = 0;
+    g_pad.lt = g_pad.rt = 0;
+    g_pad.buttons = 0;
+    pthread_mutex_unlock(&g_pad.lock);
+    fprintf(stderr, "[winios] release_all_inputs keys=%d pad_was=%d conn=%d\n",
+            released, was, conn);
+    fflush(stderr);
 }
 
 BOOL winios_pProcessEvents(DWORD mask) {
@@ -1300,7 +1400,10 @@ void winios_pointer(int x, int y, unsigned int flags, unsigned int data) {
      * top-left corner on every event. Relative mode is mouse-look, where the game
      * has hidden the cursor anyway — there is nothing to draw, and skipping this
      * also drops a dispatch_async to the main queue per touch sample. */
-    if ((flags & MOUSEEVENTF_MOVE) && (flags & MOUSEEVENTF_ABSOLUTE)) winios_cursor_move(x, y);
+    if ((flags & MOUSEEVENTF_MOVE) && (flags & MOUSEEVENTF_ABSOLUTE)) {
+        g_last_abs_x = x; g_last_abs_y = y;
+        winios_cursor_move(x, y);
+    }
 }
 
 /* ============================================================ *

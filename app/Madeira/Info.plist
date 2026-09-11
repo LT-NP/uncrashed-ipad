@@ -27,6 +27,7 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>stikjit</string>
+		<string>stikdebug</string>
 	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>

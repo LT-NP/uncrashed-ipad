@@ -851,6 +851,8 @@ struct ContentView: View {
     @State private var debuggerAttached = isDebuggerAttached()
     @ObservedObject private var input = InputSettings.shared
     @State private var pointerPanel = false
+    /// POST_BUILD_ROADMAP §7 step 2: collapsible raw-axis diagnostics.
+    @State private var gamepadPanel = false
     @Namespace private var pointerNS
     /// .compact = iPhone landscape: game surface expands, arrow keys appear.
     @Environment(\.verticalSizeClass) private var vSizeClass
@@ -890,6 +892,10 @@ struct ContentView: View {
                 jit_install_trap_handler()
                 entitlements = EntitlementStatus.check()
                 logEntitlementStatus()
+                // POST_BUILD_ROADMAP §7 step 1 prep: observe physical
+                // controllers early so connection state + diagnostics are live
+                // before any flight session. No-op without a paired device.
+                GamepadBridge.shared.start()
             }
         }
     }
@@ -946,6 +952,7 @@ struct ContentView: View {
                     }
                     .transition(.opacity)
                     pointerToggleButton
+                    gamepadToggleButton
                     diagToggleButton
                     Spacer()
                 }
@@ -957,6 +964,11 @@ struct ContentView: View {
             .zIndex(10)
             Divider()
             actionButtons
+            if gamepadPanel {
+                Divider()
+                GamepadDiagnosticsView()
+                    .padding(.horizontal, 8)
+            }
             Divider()
             logConsole
         }
@@ -1023,6 +1035,22 @@ struct ContentView: View {
                 .cornerRadius(6)
         }
         .matchedGeometryEffect(id: "pointerBtn", in: pointerNS)
+    }
+
+    /// POST_BUILD_ROADMAP §7 step 2 toggle: raw-axis diagnostics panel.
+    private var gamepadToggleButton: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            withAnimation(.easeInOut(duration: 0.22)) { gamepadPanel.toggle() }
+        } label: {
+            Image(systemName: "gamecontroller")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(.white.opacity(gamepadPanel ? 1.0 : 0.35))
+                .frame(minWidth: 40, minHeight: 32)
+                .background(Color.secondary.opacity(0.25))
+                .cornerRadius(6)
+        }
+        .buttonStyle(.plain)
     }
 
     /// ml649: heavy diagnostics on/off, live. Stroke icon, dimmed when quiet —
@@ -2553,7 +2581,11 @@ enum ControlAction: Codable, Equatable, Hashable {
     case joystickWASD        // renders as a stick, posts W/A/S/D
     case joystickArrows      // renders as a stick, posts the arrow keys
     case keyboardToggle      // raises the iOS keyboard, as in portrait
-    case pad(String)         // ml645: Xbox button. NOT WIRED — see the panel.
+    case pad(String)         // Xbox button → virtual pad state (GamepadBridge).
+                            // Drives diagnostics + the winios pad store today;
+                            // the Wine-side hook lands with §6 runtime evidence.
+    case analogLeft          // proportional left virtual stick (LX/LY)
+    case analogRight         // proportional right virtual stick (RX/RY)
 
     /// The four keys a stick drives, up/right/down/left. nil for non-sticks.
     var stickKeys: [Int32]? {
@@ -2564,7 +2596,20 @@ enum ControlAction: Codable, Equatable, Hashable {
         }
     }
     var isPad: Bool { if case .pad = self { return true }; return false }
-
+    /// Proportional touchscreen sticks (roadmap §7) — distinct from the
+    /// 8-way keyboard-emulating sticks above.
+    var isAnalogStick: Bool {
+        if case .analogLeft = self { return true }
+        if case .analogRight = self { return true }
+        return false
+    }
+    var analogID: VirtualStickID? {
+        switch self {
+        case .analogLeft: return .left
+        case .analogRight: return .right
+        default: return nil
+        }
+    }
     var label: String {
         switch self {
         case .none:            return "—"
@@ -2573,6 +2618,8 @@ enum ControlAction: Codable, Equatable, Hashable {
         case .keyboardToggle:  return "⌨"
         case .joystickWASD:    return "WASD"
         case .joystickArrows:  return "↕"
+        case .analogLeft:      return "L◉"
+        case .analogRight:     return "R◉"
         case .pad(let n):      return n
         case .key(let vk):     return ControlAction.keyLabel(vk)
         }
@@ -2631,12 +2678,30 @@ final class TouchControlsModel: ObservableObject {
 
     private struct Saved: Codable { var controls: [TouchControl]; var visible: Bool }
 
+    /// First-launch layout (POST_BUILD_ROADMAP §7): two proportional sticks
+    /// plus the minimum usable buttons, so a flight session needs no
+    /// edit-mode detour and no desktop keyboard (reset/pause/menu via Menu).
+    /// Seeded once when no saved layout exists; a saved layout — including a
+    /// deliberately emptied one — is never overwritten here.
+    static var defaultControls: [TouchControl] {
+        [
+            TouchControl(nx: 0.120, ny: 0.70, scale: 1.30, action: .analogLeft),
+            TouchControl(nx: 0.880, ny: 0.70, scale: 1.30, action: .analogRight),
+            TouchControl(nx: 0.735, ny: 0.42, scale: 1.00, action: .pad("A")),
+            TouchControl(nx: 0.815, ny: 0.26, scale: 1.00, action: .pad("B")),
+            TouchControl(nx: 0.885, ny: 0.12, scale: 0.90, action: .pad("View")),
+            TouchControl(nx: 0.945, ny: 0.12, scale: 0.90, action: .pad("Menu")),
+        ]
+    }
+
     private init() {
         loading = true
         if let d = try? Data(contentsOf: Self.url),
            let s = try? JSONDecoder().decode(Saved.self, from: d) {
             controls = s.controls
             visible  = s.visible
+        } else {
+            controls = Self.defaultControls
         }
         loading = false
     }
@@ -2832,12 +2897,17 @@ struct TouchControlButton: View {
     @State private var stickDir: Int = -1
 
     private var diameter: CGFloat { TouchControlsModel.baseDiameter * CGFloat(control.scale) }
-    private var isStick: Bool { control.action.stickKeys != nil }
+    private var isStick: Bool { control.action.stickKeys != nil || control.action.isAnalogStick }
     private var isSelected: Bool { m.editing && m.selected == control.id }
 
     var body: some View {
         ZStack {
-            if control.action.stickKeys != nil {
+            if let analog = control.action.analogID {
+                // Proportional virtual stick (§7): its own gesture drives
+                // GamepadBridge directly — the outer DragGesture below skips
+                // analog actions so the two never fight.
+                AnalogStickControlView(stick: analog, diameter: diameter)
+            } else if control.action.stickKeys != nil {
                 // Reuse the portrait pad's face so both look and animate the
                 // same; scale it to whatever size this control was pinched to.
                 JoystickFace(held: isDown, dir: stickDir, alwaysExpanded: true)
@@ -2849,8 +2919,8 @@ struct TouchControlButton: View {
                 Text(control.action.label)
                     .font(.system(size: diameter * (control.action.label.count > 2 ? 0.22 : 0.34),
                                   weight: .medium))
-                    .foregroundStyle(.white.opacity(control.action.isPad ? 0.45
-                                                    : (isDown ? 1.0 : 0.85)))
+                    .foregroundStyle(.white.opacity(control.action.isPad ? 0.75
+                                                     : (isDown ? 1.0 : 0.85)))
             }
         }
         .frame(width: diameter, height: diameter)
@@ -2891,6 +2961,8 @@ struct TouchControlButton: View {
                         let b = dragBase ?? .zero
                         m.controls[i].nx = min(max(b.x + Double(v.translation.width  / screen.width),  0.03), 0.97)
                         m.controls[i].ny = min(max(b.y + Double(v.translation.height / screen.height), 0.03), 0.97)
+                    } else if control.action.isAnalogStick {
+                        return   // owned by AnalogStickControlView's own gesture
                     } else if let q = control.action.stickKeys {
                         isDown = true
                         applyStick(snap(v.translation), q)
@@ -2901,7 +2973,9 @@ struct TouchControlButton: View {
                 }
                 .onEnded { _ in
                     dragBase = nil
-                    if let q = control.action.stickKeys {
+                    if control.action.isAnalogStick {
+                        return   // owned by AnalogStickControlView's own gesture
+                    } else if let q = control.action.stickKeys {
                         applyStick(-1, q)          // release every held direction
                         isDown = false
                     } else if isDown {
@@ -2962,9 +3036,96 @@ struct TouchControlButton: View {
             if down { MetalBackedView.toggleKeyboard() }
         case .none, .joystickWASD, .joystickArrows:
             break                                              // sticks drive themselves
-        case .pad:
-            break     // ml645: no XInput yet — deliberately inert, and labelled so
+        case .analogLeft, .analogRight:
+            break     // proportional sticks drive GamepadBridge themselves
+        case .pad(let name):
+            // Roadmap §7: digital pad buttons drive the virtual pad state
+            // (diagnostics + winios store). The Wine-side hook is pending §6
+            // evidence — this is live up to that boundary, not inert.
+            GamepadBridge.shared.setVirtualButton(pad: name, down: down)
         }
+    }
+}
+
+/// Proportional touchscreen stick (POST_BUILD_ROADMAP §7).
+///
+/// Unlike JoystickKeyView's 8-way keyboard snap, this reports a continuous
+/// -1…1 vector into GamepadBridge's virtual pad: the four independent analog
+/// axes flight needs. Each stick is its own DragGesture view, so left and
+/// right thumbs track simultaneously (multi-touch). The knob shows raw
+/// position; the bridge applies deadzone/scale so view and flight agree with
+/// the diagnostics panel.
+///
+/// Left-stick throttle latch (GamepadCalibration.throttleLatch): with FPV's
+/// springless throttle the Y persists after release; double-tap recentres.
+struct AnalogStickControlView: View {
+    let stick: VirtualStickID
+    let diameter: CGFloat
+    @State private var knob = CGSize.zero
+    @State private var active = false
+
+    private var radius: CGFloat { diameter / 2 }
+
+    var body: some View {
+        ZStack {
+            GlassShape(circle: true)
+            // Crosshair: full throw bounds at a glance.
+            Path { p in
+                p.move(to: CGPoint(x: diameter / 2 - radius * 0.7, y: diameter / 2))
+                p.addLine(to: CGPoint(x: diameter / 2 + radius * 0.7, y: diameter / 2))
+                p.move(to: CGPoint(x: diameter / 2, y: diameter / 2 - radius * 0.7))
+                p.addLine(to: CGPoint(x: diameter / 2, y: diameter / 2 + radius * 0.7))
+            }
+            .stroke(Color.white.opacity(0.25), lineWidth: 1)
+            Circle()
+                .fill(Color.white.opacity(active ? 1.0 : 0.85))
+                .frame(width: diameter * 0.42, height: diameter * 0.42)
+                .offset(knob)
+            Text(stick == .left ? "L" : "R")
+                .font(.system(size: diameter * 0.16, weight: .semibold))
+                .foregroundStyle(.black.opacity(0.45))
+                .offset(knob)
+        }
+        .frame(width: diameter, height: diameter)
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                // Double-tap recentres a latched throttle (§7 throttle behavior).
+                if stick == .left, GamepadBridge.shared.calibration.throttleLatch {
+                    GamepadBridge.shared.resetLatchedThrottle()
+                    knob = CGSize.zero
+                }
+            }
+        )
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { v in
+                    active = true
+                    let t = v.translation
+                    let d = (t.width * t.width + t.height * t.height).squareRoot()
+                    let clamped: CGSize = d > radius
+                        ? CGSize(width: t.width / d * radius, height: t.height / d * radius)
+                        : t
+                    knob = clamped
+                    // Game Y is up-positive; screen Y grows downward.
+                    let x = Float(clamped.width / radius)
+                    let y = -Float(clamped.height / radius)
+                    GamepadBridge.shared.setVirtualStick(stick, x: x, y: y)
+                    if stick == .left, GamepadBridge.shared.calibration.throttleLatch {
+                        GamepadBridge.shared.setLatchedThrottle(y)
+                    }
+                }
+                .onEnded { _ in
+                    active = false
+                    if stick == .left, GamepadBridge.shared.calibration.throttleLatch {
+                        // Springless throttle: X recentres, Y stays latched.
+                        GamepadBridge.shared.setVirtualStick(stick, x: 0, y: 0)
+                        knob = CGSize(width: 0, height: -CGFloat(GamepadBridge.shared.latchedThrottle()) * radius)
+                    } else {
+                        GamepadBridge.shared.setVirtualStick(stick, x: 0, y: 0)
+                        knob = CGSize.zero
+                    }
+                }
+        )
     }
 }
 
@@ -3101,11 +3262,13 @@ struct MappingPanel: View {
 
     private var controllerTab: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("XInput isn't wired up yet. These save with your layout but do "
-                 + "nothing when pressed — controller support lands with the Wine HID stack.")
+            Text("Buttons drive the virtual pad (diagnostics + winios store); "
+                 + "sticks are fully proportional. The Wine-side hook into "
+                 + "XInput/SDL/HID lands once §6 shows which API Uncrashed uses.")
                 .font(.system(size: 11))
                 .foregroundStyle(.orange.opacity(0.95))
                 .fixedSize(horizontal: false, vertical: true)
+            section("Analog sticks", [("L stick", .analogLeft), ("R stick", .analogRight)])
             section("Face", [("A", .pad("A")), ("B", .pad("B")), ("X", .pad("X")), ("Y", .pad("Y"))])
             section("D-pad", [("D↑", .pad("D↑")), ("D↓", .pad("D↓")),
                               ("D←", .pad("D←")), ("D→", .pad("D→"))])

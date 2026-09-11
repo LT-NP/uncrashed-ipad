@@ -42,6 +42,49 @@ diagnostic artifacts. This is a candidate fix pending hosted validation.
 All 49 local validator tests still pass. GitHub can compile this project on
 its macOS runners; signing, JIT and gameplay require subsequent device tests.
 
+Follow-up diagnosis (Sept 11, 2026): both the IPA run (`34616037175`) and
+the DXMT run (`34616059648`) failed identically — `fatal error: 'stdio.h'
+file not found` compiling Wine host tools with Xcode 26.3's absolute-path
+clang. Configure itself passed (its probe needs no headers), then `make`
+failed. Cause: the exported `SDKROOT` never reached those compiler
+invocations, and subshell exports could not reach the `make` steps outside
+the configure block anyway. `scripts/prepare-wine-ios.sh` now verifies the
+macOS SDK up front (fails in seconds with a clear error instead of minutes
+into the build) and bakes `-isysroot` into `CFLAGS`/`CPPFLAGS`/`LDFLAGS`,
+which configure records in its Makefiles. Validated locally with stubbed
+`xcrun`/`configure`: flags reach configure, empty SDK fails fast.
+
+## Local continuation — September 11, 2026 (build-independent roadmap work)
+
+The hosted build was reported failed, so the roadmap was classified by
+build/device gating and everything not needing a compiler or the iPad was
+implemented. No device result is claimed; all 71 local Python tests pass.
+
+- `app/Madeira/GamepadBridge.swift` (new, in Sources): GameController
+  observation, physical + touchscreen merge, XInput-native `winios` pad store
+  writes, `GamepadDiagnosticsView`, calibration (`madeira-gamepad.json`),
+  throttle latch, interruption release. `.pad` buttons and new proportional
+  `.analogLeft/.analogRight` sticks in `ContentView.swift` drive it; the
+  mapping panel, first-launch flight layout (`Menu`/`View`/`A`/`B` + sticks)
+  and `winios_release_all_inputs()` (held keys, mouse ups, pad zero) cover
+  roadmap §7 steps 2, 6, 7 app-side. The Wine-side XInput/SDL/HID hook waits
+  for §6 runtime evidence by design. The user's RadioMaster (USB joystick
+  mode, already flown with a native iPad sim) is the expected-good case for
+  step 1 — iPadOS support does not imply Wine-side support.
+- `StikJITHelper.swift`: compared against StikJIT/INTEGRATION.md (Sept 2026).
+  Part 1 matches; Part 2 now prefers `stikdebug://enable-jit` with bundle-id
+  + pid + script-data (correct variant for a custom script) with byte-identical
+  `stikjit://` fallback. `Info.plist` queries both schemes.
+- `tools/audit-uncrashed.py --manifest` + new
+  `tools/verify-uncrashed-transfer.py` (+ `test_verify_transfer.py`): §5
+  transfer comparison — counts, sizes, hashes where practical, shipping-exe
+  gate, nested-duplicate-directory check.
+- `docs/DEVICE_CHECKLIST.md` (new): §9 session checklist + diagnostic record.
+- `docs/POST_BUILD_ROADMAP.md` status notes updated to match (§3, §5, §7).
+
+Still blocked on a green build + device: IPA acceptance, sign/install, JIT on
+the exact iPadOS, cube, transfer, Uncrashed launch, Wine input hook, tuning.
+
 ## Changes
 
 - `app/Madeira/ContentView.swift`: Uncrashed launch button, missing-file check,

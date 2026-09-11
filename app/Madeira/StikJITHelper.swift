@@ -22,16 +22,89 @@ enum StikJITHelper {
     }
 
     /// Check if StikDebug or StikJIT is available by trying to open their URL.
+    ///
+    /// POST_BUILD_ROADMAP §3, compared against StikJIT/INTEGRATION.md (Sept
+    /// 2026 snapshot). Part 1 (universal breakpoint protocol: prepare-RX via
+    /// BRK #0xf00d with x16=1, RW alias app-side, detach with x16=0, all after
+    /// CS_DEBUGGED, developer-controlled script never a user setting) matches
+    /// this target's JITAllocator + allocatePool structure — behavior still
+    /// needs device proof, but no code change is indicated. Part 2 had two
+    /// actionable gaps, both closed in enableJIT below: the legacy `stikjit`
+    /// scheme and the missing `pid` (spec: URL always carries bundle-id AND
+    /// pid). Kept as-is per spec: `script-data` (ours is a custom script, for
+    /// which base64 script-data — not script-name — is the correct variant)
+    /// and always-send (TXM-conditional omission needs StikJIT-framework TXM
+    /// detection, which this target does not embed).
+    ///
+    /// Do not treat a `true` here, or a successful open, as proof JIT works —
+    /// only the executable-memory tests plus repeat-after-relaunch (§3
+    /// completion) establish that.
     static var isAvailable: Bool {
+        stikjitAvailable || stikdebugAvailable
+    }
+
+    /// Legacy helper app responds to the URL scheme this helper opens.
+    static var stikjitAvailable: Bool {
         guard let url = URL(string: "stikjit://enable-jit") else { return false }
+        return UIApplication.shared.canOpenURL(url)
+    }
+
+    /// Current StikDebug app responds to its own scheme. Informational until
+    /// the INTEGRATION.md protocol migration is device-validated (see above).
+    /// Requires the `stikdebug` LSApplicationQueriesSchemes entry in Info.plist.
+    static var stikdebugAvailable: Bool {
+        guard let url = URL(string: "stikdebug://") else { return false }
         return UIApplication.shared.canOpenURL(url)
     }
 
     /// Open StikDebug with our JIT script embedded in the URL.
     /// StikDebug will attach to our process and run the script.
+    ///
+    /// Prefers the spec-shaped `stikdebug://enable-jit` request (bundle-id +
+    /// pid + base64 script-data for our custom script) when StikDebug answers
+    /// that scheme; otherwise — or if the open itself fails — falls back to
+    /// the pre-migration `stikjit://` URL, unchanged byte-for-byte.
     static func enableJIT(completion: @escaping (Bool) -> Void) {
         let bundleId = Bundle.main.bundleIdentifier ?? "com.madeira.emulator"
+        let pid = String(getpid())
 
+        LogStore.shared.log("Helper apps present: stikjit=\(stikjitAvailable) stikdebug=\(stikdebugAvailable)")
+
+        if stikdebugAvailable, let url = stikdebugURL(bundleId: bundleId, pid: pid) {
+            LogStore.shared.log("Opening StikDebug (stikdebug scheme, pid=\(pid))...")
+            UIApplication.shared.open(url, options: [:]) { success in
+                if !success {
+                    LogStore.shared.log("stikdebug open failed — falling back to stikjit scheme",
+                                        level: .error)
+                    openLegacyJIT(bundleId: bundleId, completion: completion)
+                    return
+                }
+                // Poll for CS_DEBUGGED flag
+                pollForJIT(completion: completion)
+            }
+            return
+        }
+        openLegacyJIT(bundleId: bundleId, completion: completion)
+    }
+
+    /// Spec-shaped request for a custom-script app:
+    /// stikdebug://enable-jit?bundle-id=&pid=&script-data=
+    /// URLComponents owns the percent-encoding (base64 carries +/=).
+    private static func stikdebugURL(bundleId: String, pid: String) -> URL? {
+        var components = URLComponents()
+        components.scheme = "stikdebug"
+        components.host = "enable-jit"
+        components.queryItems = [
+            URLQueryItem(name: "bundle-id", value: bundleId),
+            URLQueryItem(name: "pid", value: pid),
+            URLQueryItem(name: "script-data", value: resolvedScriptBase64),
+        ]
+        return components.url
+    }
+
+    /// Pre-migration behavior. Deliberately untouched: a blind rewrite here
+    /// could break the one path believed to work.
+    private static func openLegacyJIT(bundleId: String, completion: @escaping (Bool) -> Void) {
         // Build the URL with script data
         let scriptData = resolvedScriptBase64.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let urlString = "stikjit://enable-jit?bundle-id=\(bundleId)&script-data=\(scriptData)"
@@ -42,7 +115,7 @@ enum StikJITHelper {
             return
         }
 
-        LogStore.shared.log("Opening StikDebug to enable JIT...")
+        LogStore.shared.log("Opening StikDebug to enable JIT (legacy stikjit scheme)...")
 
         UIApplication.shared.open(url, options: [:]) { success in
             if !success {
