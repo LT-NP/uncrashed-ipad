@@ -47,6 +47,12 @@ aarch64-w64-mingw32-clang --version
 mkdir -p "$WINE_BUILD"
 (
     cd "$WINE_BUILD"
+    # Wine's build tools execute on macOS. Selecting clang with xcrun alone
+    # does not pass the macOS SDK to subsequent compiler invocations.
+    SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+    export SDKROOT
+    # Preserve configure's actual compiler/linker diagnostic on failure.
+    trap 'status=$?; if [[ $status -ne 0 && -f config.log ]]; then cat config.log >&2; fi; exit "$status"' EXIT
     CC="$(xcrun --sdk macosx --find clang)" \
     CXX="$(xcrun --sdk macosx --find clang++)" \
     ../configure --enable-win64 --enable-archs=aarch64 --with-mingw=llvm-mingw \

@@ -184,6 +184,7 @@ jobs:
             build/**/obj/*.err
             build/**/obj/err-*.txt
             wine-configure.log
+            wine/build-macos/config.log
             wine-headers-build.log
             wine-dxmt-pe-build.log
             freetype-build.log

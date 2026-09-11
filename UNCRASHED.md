@@ -28,6 +28,20 @@ below predate these changes and do not establish a working build. The next
 step is a macOS run of `Build DXMT iOS`, resolving its first concrete failure,
 then the complete `Build IPA (hosted, unsigned)` workflow.
 
+## Hosted build continuation — September 11, 2026
+
+Commit `4b11b5b` was pushed to `fix/ci-ios-build`, starting hosted IPA run
+`34615832075`; the real DXMT build was dispatched as `34615897054`.
+Inspection of previous IPA run `34593767355` found Wine configure failed with
+`C compiler cannot create executables`. Its artifacts omitted `config.log`,
+so the underlying linker/compiler error was not available.
+
+The follow-up explicitly selects the macOS SDK for Wine host configuration,
+prints `config.log` on configure failure, and retains it in both workflows'
+diagnostic artifacts. This is a candidate fix pending hosted validation.
+All 49 local validator tests still pass. GitHub can compile this project on
+its macOS runners; signing, JIT and gameplay require subsequent device tests.
+
 ## Changes
 
 - `app/Madeira/ContentView.swift`: Uncrashed launch button, missing-file check,

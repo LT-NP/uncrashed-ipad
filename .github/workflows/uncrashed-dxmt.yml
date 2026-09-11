@@ -105,6 +105,7 @@ jobs:
           path: |
             *-build.log
             wine-configure.log
+            wine/build-macos/config.log
             build/dxmt-ios/obj/*.log
             build/dxmt-ios/pe/meson-logs/**
             toolchains/llvm-*/CMakeFiles/CMakeConfigureLog.yaml
