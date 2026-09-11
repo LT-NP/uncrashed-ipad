@@ -80,7 +80,12 @@ jobs:
         run: |
           valid=true
           for lib in gmp nettle hogweed gnutls; do
-            python3 tools/validate-ios-bundle.py --archive "toolchains/gnutls-ios/lib/lib$lib.a" || valid=false
+            if [[ -f "toolchains/gnutls-ios/lib/lib$lib.a" ]]; then
+              python3 tools/validate-ios-bundle.py --archive "toolchains/gnutls-ios/lib/lib$lib.a" || valid=false
+            else
+              echo "No cached lib$lib.a; will build GnuTLS dependencies from source."
+              valid=false
+            fi
           done
           [[ -s toolchains/gnutls-ios/include/gnutls/gnutls.h ]] || valid=false
           if [[ "$valid" != true ]]; then
