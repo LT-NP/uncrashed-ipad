@@ -40,6 +40,8 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
           submodules: false
+      - name: Fetch Wine sources for symbol generator tests
+        run: git submodule update --init --depth 1 wine
       - name: Test runtime and bundle validation
         run: python3 -m unittest discover -s tools -p 'test_*.py'
       - name: Verify Xcode and install native tools
@@ -132,13 +134,16 @@ jobs:
           # Wine sources, the three build trees plus the crypto helper, the
           # pinned dependency build scripts feeding them (FreeType/GnuTLS),
           # and the validators gating them.
-          key: ipa-wineunix-${{ runner.arch }}-iphoneos26-${{ steps.revisions.outputs.wine }}-${{ hashFiles('build/wineserver/**', 'build/ntdll-unix/**', 'build/win32u-unix/**', 'build/crypto-unix/**', 'build/freetype-ios/build.sh', 'build/gnutls-ios/build.sh', 'build/gnutls-ios/src/SHA256SUMS', 'scripts/prepare-wine-ios.sh', 'tools/validate-ios-bundle.py') }}
-      - name: Build Wine unix libraries
+          key: ipa-wineunix-${{ runner.arch }}-iphoneos26-${{ steps.revisions.outputs.wine }}-${{ hashFiles('build/wineserver/**', 'build/ntdll-unix/**', 'build/win32u-unix/**', 'build/crypto-unix/**', 'build/freetype-ios/build.sh', 'build/gnutls-ios/build.sh', 'build/gnutls-ios/src/SHA256SUMS', 'scripts/prepare-wine-ios.sh', 'tools/validate-ios-bundle.py', 'tools/ar-macho-symbols.py') }}
+      - name: Build Wine server
         if: steps.wine-unix-cache.outputs.cache-hit != 'true'
-        run: |
-          bash build/wineserver/build.sh 2>&1 | tee wineserver-build.log
-          bash build/ntdll-unix/build.sh 2>&1 | tee ntdll-build.log
-          bash build/win32u-unix/build.sh 2>&1 | tee win32u-build.log
+        run: bash build/wineserver/build.sh 2>&1 | tee wineserver-build.log
+      - name: Build Wine ntdll and crypto/network unixlibs
+        if: steps.wine-unix-cache.outputs.cache-hit != 'true'
+        run: bash build/ntdll-unix/build.sh 2>&1 | tee ntdll-build.log
+      - name: Build Wine win32u
+        if: steps.wine-unix-cache.outputs.cache-hit != 'true'
+        run: bash build/win32u-unix/build.sh 2>&1 | tee win32u-build.log
       - name: Validate Wine unix libraries
         run: |
           python3 tools/validate-ios-bundle.py --archive app/Madeira/libwineserver.a

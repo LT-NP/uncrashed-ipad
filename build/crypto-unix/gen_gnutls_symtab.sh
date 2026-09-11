@@ -11,6 +11,8 @@
 # Entries reference symbols via __asm__ aliases, so no gnutls headers
 # (and no prototype conflicts) are needed here at all.
 set -euo pipefail
+# Keep shell sorting consistent with the Python parser on macOS and Linux.
+export LC_ALL=C
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
@@ -35,9 +37,9 @@ SOURCES=(
 # 1. Names Wine wants: LOAD_FUNCPTR(name) / LOAD_FUNCPTR_OPT(name) /
 #    dlsym(handle, "name")
 wanted=$( {
-    grep -hoE 'LOAD_FUNCPTR(_OPT)?\(\s*[A-Za-z0-9_]+' "${SOURCES[@]}" \
-        | sed -E 's/LOAD_FUNCPTR(_OPT)?\(\s*//'
-    grep -hoE 'dlsym\([^,]+,\s*"[A-Za-z0-9_]+"' "${SOURCES[@]}" \
+    grep -hoE 'LOAD_FUNCPTR(_OPT)?\([[:space:]]*[A-Za-z0-9_]+' "${SOURCES[@]}" \
+        | sed -E 's/LOAD_FUNCPTR(_OPT)?\([[:space:]]*//'
+    grep -hoE 'dlsym\([^,]+,[[:space:]]*"[A-Za-z0-9_]+"' "${SOURCES[@]}" \
         | sed -E 's/.*"([A-Za-z0-9_]+)".*/\1/'
 } | grep -v '^f$' | sort -u )   # '^f$' = the LOAD_FUNCPTR(f) macro definition itself
 if [[ -z "${wanted//[[:space:]]/}" ]]; then

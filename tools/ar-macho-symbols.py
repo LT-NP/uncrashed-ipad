@@ -62,6 +62,8 @@ def _parse_ar_members(data):
         pad = size & 1
         raw_name = header[:16].decode('ascii')
         content_start = offset + _HEADER_LEN
+        if content_start + size > len(data):
+            _error('truncated archive member at offset %d' % offset)
         name = raw_name
         if raw_name.startswith('#1/'):
             # BSD long name: length follows, name bytes lead the content.
@@ -69,8 +71,8 @@ def _parse_ar_members(data):
                 name_len = int(raw_name[3:].strip())
             except ValueError:
                 _error('bad BSD long-name length at offset %d' % offset)
-            if content_start + name_len > len(data):
-                _error('truncated BSD long name at offset %d' % offset)
+            if name_len < 0 or name_len > size:
+                _error('bad BSD long-name length at offset %d' % offset)
             name = data[content_start:content_start + name_len].decode('ascii', errors='replace').rstrip('\0')
             content_start += name_len
             size -= name_len

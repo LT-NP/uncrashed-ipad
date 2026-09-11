@@ -9,6 +9,8 @@ on:
       - "app/**"
       - "tools/**"
       - "scripts/**"
+      - "build/crypto-unix/**"
+      - "wine"
 
 permissions:
   contents: read
@@ -21,6 +23,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - name: Check out Wine sources for symbol generator tests
+        run: git submodule update --init --depth 1 wine
+      - name: Test GnuTLS archive parsing and symbol generation
+        timeout-minutes: 2
+        run: python3 -m unittest discover -s tools -p 'test_*sym*.py'
       - name: Validate Xcode project and property lists
         run: |
           plutil -lint app/Madeira.xcodeproj/project.pbxproj

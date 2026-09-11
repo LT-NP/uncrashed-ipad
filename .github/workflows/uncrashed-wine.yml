@@ -92,11 +92,12 @@ jobs:
           done
       - name: Prepare Wine headers and FreeType
         run: bash scripts/prepare-wine-ios.sh
-      - name: Build Wine native libraries
-        run: |
-          bash build/wineserver/build.sh 2>&1 | tee wineserver-build.log
-          bash build/ntdll-unix/build.sh 2>&1 | tee ntdll-build.log
-          bash build/win32u-unix/build.sh 2>&1 | tee win32u-build.log
+      - name: Build Wine server
+        run: bash build/wineserver/build.sh 2>&1 | tee wineserver-build.log
+      - name: Build Wine ntdll and crypto/network unixlibs
+        run: bash build/ntdll-unix/build.sh 2>&1 | tee ntdll-build.log
+      - name: Build Wine win32u
+        run: bash build/win32u-unix/build.sh 2>&1 | tee win32u-build.log
       - name: Validate every output archive
         run: |
           for lib in libwineserver.a libntdll_unix.a libwin32u_unix.a; do

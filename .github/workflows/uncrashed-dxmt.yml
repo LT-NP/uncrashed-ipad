@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - name: Fetch Wine sources for symbol generator tests
+        run: git submodule update --init --depth 1 wine
       - name: Check build scripts and validators
         shell: bash
         run: |

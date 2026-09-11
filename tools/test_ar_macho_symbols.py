@@ -109,6 +109,20 @@ class ParserTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ar.defined_symbols(str(tmp))
 
+    def test_invalid_bsd_name_lengths_rejected(self):
+        for name in ('#1/-1', '#1/100'):
+            with self.subTest(name=name):
+                data = b'!<arch>\n' + ar_member(name, b'x')
+                with self.assertRaisesRegex(ValueError, 'BSD long-name length'):
+                    list(ar._parse_ar_members(data))
+
+    def test_truncated_special_members_rejected(self):
+        for name in ('/', '//', '/SYMDEF'):
+            with self.subTest(name=name):
+                data = b'!<arch>\n' + ar_member(name, b'0123456789')
+                with self.assertRaisesRegex(ValueError, 'truncated archive member'):
+                    list(ar._parse_ar_members(data[:-4]))
+
     def test_garbage_member_skipped_not_fatal(self):
         tmp = Path(tempfile.mkdtemp()) / 'libmix.a'
         write_archive(tmp, [('junk.o', b'\0' * 100), ('good.o', macho64(SYMS[:1]))])
