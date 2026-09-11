@@ -15,8 +15,9 @@ set -euo pipefail
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
 WINE_SRC="$REPO_ROOT/wine"
-GNUTLS_LIB="$REPO_ROOT/toolchains/gnutls-ios/lib/libgnutls.a"
-OUT="$BUILD_DIR/gnutls_symtab_ios.c"
+# Overridable for tests (defaults are the real build inputs).
+GNUTLS_LIB="${GNUTLS_LIB_OVERRIDE:-$REPO_ROOT/toolchains/gnutls-ios/lib/libgnutls.a}"
+OUT="${SYMTAB_OUT:-$BUILD_DIR/gnutls_symtab_ios.c}"
 
 for src in "$WINE_SRC/dlls/bcrypt/gnutls.c" \
     "$WINE_SRC/dlls/secur32/schannel_gnutls.c" \
@@ -39,17 +40,18 @@ wanted=$( {
     grep -hoE 'dlsym\([^,]+,\s*"[A-Za-z0-9_]+"' "${SOURCES[@]}" \
         | sed -E 's/.*"([A-Za-z0-9_]+)".*/\1/'
 } | grep -v '^f$' | sort -u )   # '^f$' = the LOAD_FUNCPTR(f) macro definition itself
-
-# 2. Names libgnutls.a defines (defined symbols only, strip leading _)
-if [[ "$(uname -s)" == Darwin ]]; then
-    available=$(nm -gU "$GNUTLS_LIB" 2>/dev/null | awk '{print $3}' | sed 's/^_//' | sort -u)
-else
-    available=$(nm -g --defined-only "$GNUTLS_LIB" 2>/dev/null | awk '{print $3}' | sed 's/^_//' | sort -u)
-fi
 if [[ -z "${wanted//[[:space:]]/}" ]]; then
-    echo "ERROR: no Wanted GnuTLS symbols found in Wine sources" >&2
+    echo "ERROR: no wanted GnuTLS symbols found in Wine sources" >&2
     exit 1
 fi
+
+# 2. Names libgnutls.a defines. Parsed with tools/ar-macho-symbols.py
+# (stdlib only): a bare `nm -gU` hung a CI job for 4.5 hours with no output
+# and no way to bound it, while every read in the parser is capped by header
+# sizes, so corrupt input fails fast instead. Leading underscores are already
+# stripped by the parser.
+echo "listing defined symbols in $GNUTLS_LIB ..."
+available=$(python3 "$REPO_ROOT/tools/ar-macho-symbols.py" "$GNUTLS_LIB")
 if [[ -z "${available//[[:space:]]/}" ]]; then
     echo "ERROR: no defined symbols in $GNUTLS_LIB (build gnutls-ios first)" >&2
     exit 1

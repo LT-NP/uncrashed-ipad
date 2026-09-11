@@ -82,7 +82,14 @@ make -C "$WINE_BUILD" -j"$JOBS" include/all 2>&1 | tee "$REPO_ROOT/wine-headers-
 for header in config.h dwrite.h dwrite_3.h; do
     [[ -s "$WINE_BUILD/include/$header" ]] || { echo "ERROR: generated Wine header missing: $header" >&2; exit 1; }
 done
-bash "$REPO_ROOT/build/freetype-ios/build.sh" 2>&1 | tee "$REPO_ROOT/freetype-build.log"
+# FreeType takes minutes to rebuild and its outputs are cached alongside the
+# native dependencies: skip when the staged archive and headers validate.
+if python3 "$REPO_ROOT/tools/validate-ios-bundle.py" --archive "$REPO_ROOT/build/freetype-ios/build/libfreetype.a" >/dev/null 2>&1 \
+    && [[ -s "$REPO_ROOT/build/freetype-ios/build/include/freetype/config/ftconfig.h" ]]; then
+    echo "FreeType outputs valid — skipping rebuild."
+else
+    bash "$REPO_ROOT/build/freetype-ios/build.sh" 2>&1 | tee "$REPO_ROOT/freetype-build.log"
+fi
 
 if [[ "$DXMT_PE" == 1 ]]; then
     # These are PE/COFF libraries, not the iOS Mach-O archives. Always rebuild

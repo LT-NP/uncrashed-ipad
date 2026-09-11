@@ -26,18 +26,33 @@ for archive in "$WINE_BUILD/libs/winecrt0/aarch64-windows/libwinecrt0.a" \
 done
 
 export SDKROOT
-SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+# The native compiler below is invoked by absolute path (no default sysroot),
+# so SDKROOT alone is not enough to find system headers — the Wine host-tools
+# build failed exactly this way. Resolve once, verify up front, and pass
+# -isysroot explicitly in the Meson native file (harmless if redundant).
+MACOS_SDK="$(xcrun --sdk macosx --show-sdk-path)"
+if [[ -z "$MACOS_SDK" || ! -d "$MACOS_SDK" ]]; then
+    echo "ERROR: macOS SDK not found (xcrun returned '${MACOS_SDK:-<empty>}')." >&2
+    exit 1
+fi
+if [[ ! -f "$MACOS_SDK/usr/include/stdio.h" ]]; then
+    echo "ERROR: macOS SDK has no usr/include/stdio.h: $MACOS_SDK" >&2
+    exit 1
+fi
+echo "macOS SDK: $MACOS_SDK"
+SDKROOT="$MACOS_SDK"
 export PATH="$MINGW/bin:$PATH"
 APPLE_CLANG=$(xcrun --find clang)
 APPLE_CLANGXX=$(xcrun --find clang++)
 
 # Explicit binary paths avoid source-tree symlinks and accidental selection
 # of llvm-mingw's clang as the native macOS compiler.
-python3 - "$BUILD_DIR" "$MINGW" "$APPLE_CLANG" "$APPLE_CLANGXX" <<'PY'
+python3 - "$BUILD_DIR" "$MINGW" "$APPLE_CLANG" "$APPLE_CLANGXX" "$MACOS_SDK" <<'PY'
 import sys
 from pathlib import Path
 
 build, mingw = map(Path, sys.argv[1:3])
+sdk = sys.argv[5]
 def quote(value):
     return "'" + str(value).replace('\\', '\\\\').replace("'", "\\'") + "'"
 
@@ -49,8 +64,14 @@ cross += [f"xcrun = ['/bin/bash', {quote(build / 'xcrun-ios-shaders.sh')}]",
           '', '[properties]', 'needs_exe_wrapper = true', '', '[host_machine]',
           "system = 'windows'", "cpu_family = 'aarch64'", "cpu = 'aarch64'", "endian = 'little'"]
 (build / 'aarch64-windows.ini').write_text('\n'.join(cross) + '\n')
+sysroot = ['-isysroot', sdk]
 (build / 'macos-native.ini').write_text(
-    f'[binaries]\nc = {quote(sys.argv[3])}\ncpp = {quote(sys.argv[4])}\n')
+    f'[binaries]\nc = {quote(sys.argv[3])}\ncpp = {quote(sys.argv[4])}\n'
+    f'\n[built-in options]\n'
+    f'c_args = {sysroot}\n'
+    f'cpp_args = {sysroot}\n'
+    f'c_link_args = {sysroot}\n'
+    f'cpp_link_args = {sysroot}\n')
 PY
 
 SETUP_ARGS=()

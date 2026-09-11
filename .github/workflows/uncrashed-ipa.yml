@@ -25,7 +25,9 @@ concurrency:
 jobs:
   ipa:
     runs-on: macos-15
-    timeout-minutes: 300
+    # First cold-cache runs compile ~150 Wine sources plus DXMT/LLVM; cap
+    # below the 360-minute GitHub maximum while leaving headroom past that.
+    timeout-minutes: 360
     defaults:
       run:
         shell: bash
@@ -64,9 +66,10 @@ jobs:
             FEX/build-ios
             toolchains/gnutls-ios
             build/gnutls-ios/obj
+            build/freetype-ios/build
             wine/build-macos
             toolchains/llvm-mingw-20260421-ucrt-macos-universal
-          key: ipa-native-${{ runner.arch }}-xcode26.3-${{ steps.revisions.outputs.fex }}-${{ steps.revisions.outputs.wine }}-${{ steps.revisions.outputs.dxmt }}-${{ hashFiles('scripts/build-fex-ios.sh', 'scripts/prepare-wine-ios.sh', 'patches/fex-ios-arm64-mbi.patch', 'build/gnutls-ios/build.sh', 'build/gnutls-ios/src/SHA256SUMS') }}
+          key: ipa-native-${{ runner.arch }}-xcode26.3-${{ steps.revisions.outputs.fex }}-${{ steps.revisions.outputs.wine }}-${{ steps.revisions.outputs.dxmt }}-${{ hashFiles('scripts/build-fex-ios.sh', 'scripts/prepare-wine-ios.sh', 'patches/fex-ios-arm64-mbi.patch', 'build/gnutls-ios/build.sh', 'build/gnutls-ios/src/SHA256SUMS', 'build/freetype-ios/build.sh') }}
       - name: Build and validate FEX
         run: |
           libraries=(
@@ -111,14 +114,45 @@ jobs:
             FEX/build-ios
             toolchains/gnutls-ios
             build/gnutls-ios/obj
+            build/freetype-ios/build
             wine/build-macos
             toolchains/llvm-mingw-20260421-ucrt-macos-universal
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Restore Wine unix libraries
+        id: wine-unix-cache
+        uses: actions/cache/restore@v4
+        with:
+          # Final archives only: the build scripts recompile unconditionally
+          # from a clean tree on a miss, so object dirs buy nothing here.
+          path: |
+            app/Madeira/libwineserver.a
+            app/Madeira/libntdll_unix.a
+            app/Madeira/libwin32u_unix.a
+          # Any input that can change the archives must be in this key:
+          # Wine sources, the three build trees plus the crypto helper, the
+          # pinned dependency build scripts feeding them (FreeType/GnuTLS),
+          # and the validators gating them.
+          key: ipa-wineunix-${{ runner.arch }}-iphoneos26-${{ steps.revisions.outputs.wine }}-${{ hashFiles('build/wineserver/**', 'build/ntdll-unix/**', 'build/win32u-unix/**', 'build/crypto-unix/**', 'build/freetype-ios/build.sh', 'build/gnutls-ios/build.sh', 'build/gnutls-ios/src/SHA256SUMS', 'scripts/prepare-wine-ios.sh', 'tools/validate-ios-bundle.py') }}
       - name: Build Wine unix libraries
+        if: steps.wine-unix-cache.outputs.cache-hit != 'true'
         run: |
           bash build/wineserver/build.sh 2>&1 | tee wineserver-build.log
           bash build/ntdll-unix/build.sh 2>&1 | tee ntdll-build.log
           bash build/win32u-unix/build.sh 2>&1 | tee win32u-build.log
+      - name: Validate Wine unix libraries
+        run: |
+          python3 tools/validate-ios-bundle.py --archive app/Madeira/libwineserver.a
+          python3 tools/validate-ios-bundle.py --archive app/Madeira/libntdll_unix.a
+          python3 tools/validate-ios-bundle.py --archive app/Madeira/libwin32u_unix.a
+      - name: Save Wine unix libraries
+        if: steps.wine-unix-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            app/Madeira/libwineserver.a
+            app/Madeira/libntdll_unix.a
+            app/Madeira/libwin32u_unix.a
+          key: ${{ steps.wine-unix-cache.outputs.cache-primary-key }}
       - name: Fetch and validate Microsoft runtime inputs
         run: bash tools/fetch-vcruntime.sh 2>&1 | tee vcruntime-build.log
         env:
@@ -143,8 +177,43 @@ jobs:
             toolchains/llvm-host-build
             toolchains/llvm-ios-build
           key: ${{ steps.llvm-cache.outputs.cache-primary-key }}
+      - name: Restore DXMT builds
+        id: dxmt-cache
+        uses: actions/cache/restore@v4
+        with:
+          # Final outputs only (see Wine unix libraries above for why).
+          # The DXMT PE build consumes Wine import archives, and the native
+          # build consumes LLVM archives, so both revisions plus their build
+          # scripts are key inputs alongside the DXMT sources.
+          path: |
+            build/dxmt-ios/libdxmt_combined.a
+            app/Madeira/libdxmt_combined.a
+            app/Madeira/aarch64-windows/d3d11.dll
+            app/Madeira/aarch64-windows/dxgi.dll
+            app/Madeira/aarch64-windows/winemetal.dll
+            app/Madeira/aarch64-windows/d3d10core.dll
+          key: ipa-dxmt-${{ runner.arch }}-xcode26.3-${{ steps.revisions.outputs.dxmt }}-${{ steps.revisions.outputs.wine }}-${{ hashFiles('build/dxmt-ios/*.sh', 'build/dxmt-ios/*.md', 'build/dxmt-ios/build-llvm.sh', 'scripts/prepare-wine-ios.sh', 'tools/validate-ios-bundle.py') }}
       - name: Build DXMT native library and ARM64 PE modules
+        if: steps.dxmt-cache.outputs.cache-hit != 'true'
         run: bash build/dxmt-ios/build-all.sh 2>&1 | tee dxmt-build.log
+      - name: Validate DXMT builds
+        run: |
+          python3 tools/validate-ios-bundle.py --archive app/Madeira/libdxmt_combined.a
+          for dll in d3d11 dxgi winemetal d3d10core; do
+            [[ -s "app/Madeira/aarch64-windows/$dll.dll" ]] || { echo "ERROR: missing DXMT output: $dll.dll" >&2; exit 1; }
+          done
+      - name: Save DXMT builds
+        if: steps.dxmt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/dxmt-ios/libdxmt_combined.a
+            app/Madeira/libdxmt_combined.a
+            app/Madeira/aarch64-windows/d3d11.dll
+            app/Madeira/aarch64-windows/dxgi.dll
+            app/Madeira/aarch64-windows/winemetal.dll
+            app/Madeira/aarch64-windows/d3d10core.dll
+          key: ${{ steps.dxmt-cache.outputs.cache-primary-key }}
       - name: Validate inputs before Xcode
         run: |
           for library in wineserver ntdll_unix win32u_unix dxmt_combined gmp nettle hogweed gnutls; do

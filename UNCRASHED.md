@@ -54,6 +54,25 @@ into the build) and bakes `-isysroot` into `CFLAGS`/`CPPFLAGS`/`LDFLAGS`,
 which configure records in its Makefiles. Validated locally with stubbed
 `xcrun`/`configure`: flags reach configure, empty SDK fails fast.
 
+Second diagnosis, same day: the rebuilt IPA run (`34622414551`) hung 4h38m
+with no output inside `build/ntdll-unix/build.sh`, right after the
+`crypto/network unixlibs` banner. Artifact forensics (only
+`audio_null_ios.err` present, no `gnutls_symtab_ios.err`) proved the hang
+was inside `gen_gnutls_symtab.sh` — specifically its bare `nm -gU`, the
+only `nm` in the whole build path — before the next compile ever started.
+Replaced with `tools/ar-macho-symbols.py` (stdlib-only bounded Mach-O
+parser; corrupt input fails fast), covered by `test_ar_macho_symbols.py`
+and end-to-end `test_gen_gnutls_symtab.py` against the real Wine sources.
+
+Build caching (so a full rebuild is not needed every time): dependency
+stages were already cached (FEX, GnuTLS, Wine configure outputs, LLVM) but
+the Wine unix libraries and DXMT outputs recompiled from zero on every run
+— that is where the hours went. The IPA workflow now restores/validates/
+saves those final archives (`wine-unix` and `dxmt` caches, content-keyed;
+FreeType outputs joined the native cache with validate-or-rebuild). Pushes
+touching only `app/**` now skip every native compile. First run after this
+change still compiles everything once to seed the caches.
+
 ## Local continuation — September 11, 2026 (build-independent roadmap work)
 
 The hosted build was reported failed, so the roadmap was classified by
