@@ -74,11 +74,18 @@ sysroot = ['-isysroot', sdk]
     f'cpp_link_args = {sysroot}\n')
 PY
 
-SETUP_ARGS=()
-[[ ! -f "$PE_BUILD/meson-private/coredata.dat" ]] || SETUP_ARGS+=(--reconfigure)
-meson setup "${SETUP_ARGS[@]}" --cross-file "$BUILD_DIR/aarch64-windows.ini" \
-    --native-file "$BUILD_DIR/macos-native.ini" --buildtype release \
-    "-Dwine_build_path=$WINE_BUILD" "$PE_BUILD" "$DXMT_ROOT"
+# macOS still ships Bash 3.2, where expanding an empty array with `set -u`
+# aborts with "unbound variable". Spell out the two Meson invocations so the
+# first clean build works as well as a reconfiguration of an existing tree.
+if [[ -f "$PE_BUILD/meson-private/coredata.dat" ]]; then
+    meson setup --reconfigure --cross-file "$BUILD_DIR/aarch64-windows.ini" \
+        --native-file "$BUILD_DIR/macos-native.ini" --buildtype release \
+        "-Dwine_build_path=$WINE_BUILD" "$PE_BUILD" "$DXMT_ROOT"
+else
+    meson setup --cross-file "$BUILD_DIR/aarch64-windows.ini" \
+        --native-file "$BUILD_DIR/macos-native.ini" --buildtype release \
+        "-Dwine_build_path=$WINE_BUILD" "$PE_BUILD" "$DXMT_ROOT"
+fi
 meson compile -C "$PE_BUILD" -j "$JOBS"
 
 python3 - "$REPO_ROOT/tools/validate-ios-bundle.py" "$PE_BUILD" <<'PY'
