@@ -1,9 +1,21 @@
 # Installing a verified Madeira IPA
 
-The September 10 artifact from run `34445071135` is incomplete: it has no app
-executable. Do not use that artifact for installation. See
-[the build audit](BUILD_AUDIT_2026-09-10.md). The corrected workflow must finish
-compiling and pass bundle validation before the following device steps apply.
+Use the `Madeira-unsigned-ipa` artifact from successful GitHub Actions run
+[`34677939776`](https://github.com/LT-NP/uncrashed-ipad/actions/runs/34677939776).
+The artifact contains `Madeira-unsigned.ipa`; its SHA-256 is:
+
+```
+8b7f97d03a0cab0aa80a4924b587b13f02e73a6938bd8a9e71303cc3806b768f
+```
+
+The workflow and a separate downloaded-artifact check both validated the IPA.
+It contains a thin ARM64 application executable and all required Wine, FEX,
+DXMT, Microsoft runtime and prefix resources. This is structural validation;
+signing, JIT attachment and execution still have to be tested on the iPad.
+
+The September 10 artifact from run `34445071135` is incomplete because it has no
+app executable. Do not use that older artifact. See
+[the build audit](BUILD_AUDIT_2026-09-10.md).
 
 ## Initial SideStore setup
 
@@ -21,8 +33,8 @@ SideStore and refresh SideStore itself before installing other apps.
 
 ## Install and validate the app
 
-1. Download `Madeira-unsigned-ipa` from a completed build that passed the new
-   bundle-validation steps. Extract the outer artifact ZIP to obtain the IPA.
+1. Download `Madeira-unsigned-ipa` from run `34677939776`. Extract the outer
+   artifact ZIP to obtain `Madeira-unsigned.ipa`.
 2. Transfer the IPA to Files on the iPad. With LocalDevVPN connected, select it
    using SideStore's My Apps / + flow to sign and install it.
 3. Install and configure [StikDebug](https://github.com/StikDebug/StikDebug),
